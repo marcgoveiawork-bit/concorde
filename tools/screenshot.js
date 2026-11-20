@@ -6,16 +6,17 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
 (async () => {
   const [root, page, viewsJson, w = 1200, h = 900] = process.argv.slice(2);
   const b = await chromium.launch();
-  const p = await b.newPage({ viewport: { width: +w, height: +h } });
+  const p = await b.newPage(process.env.PHONE ? { viewport: { width: +w, height: +h }, deviceScaleFactor: 1, isMobile: true, hasTouch: true } : { viewport: { width: +w, height: +h } });
   p.on('console', m => console.log('console:', m.text()));
   p.on('pageerror', e => console.log('ERR', e.message));
+  p.on('response', r => { if (r.status() >= 400) console.log('HTTP', r.status(), r.url()); });
   await p.route('http://local.test/**', async route => {
     const rel = decodeURIComponent(new URL(route.request().url()).pathname);
-    const file = path.join(root, rel);
+    const file = path.join(path.resolve(root), rel);
     if (!file.startsWith(path.resolve(root)) || !fs.existsSync(file)) return route.fulfill({ status: 404, body: 'nf' });
     route.fulfill({ status: 200, body: fs.readFileSync(file), contentType: TYPES[path.extname(file)] || 'application/octet-stream' });
   });
-  const NM = path.join(__dirname, 'tools/node_modules');
+  const NM = path.join(__dirname, 'node_modules');
   await p.route('https://cdn.jsdelivr.net/npm/**', route => {
     const m = new URL(route.request().url()).pathname.match(/^\/npm\/((?:@[^/]+\/)?[^@/]+)@[^/]+\/(.*)$/);
     const file = m && path.join(NM, m[1], m[2]);
@@ -24,7 +25,7 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
   });
   await p.route(/fonts\.(googleapis|gstatic)\.com/, route => route.fulfill({ status: 200, body: '', contentType: 'text/css' }));
   await p.goto('http://local.test/' + page);
-  await p.waitForFunction(() => window.ready, null, { timeout: 240000 });
+  await p.waitForFunction(() => window.ready, null, { timeout: +(process.env.TIMEOUT || 240000) });
   for (const [n, expr] of JSON.parse(viewsJson)) {
     await p.evaluate(expr);
     await p.waitForTimeout(+(process.env.WAIT || 300));

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html><body style="margin:0;background:#334">
+<canvas id="c"></canvas>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/"}}</script>
+<script type="module">
+// Model inspection page (tests only): loads the raw model, reports node bounds, and renders orthographic views.
+// window.view(dir, up, filter) renders along `dir`; window.info holds the world bounds of every named node.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const r = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+r.setSize(innerWidth, innerHeight);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x334455);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 2.5));
+const dl = new THREE.DirectionalLight(0xffffff, 2); dl.position.set(3, 5, 4); scene.add(dl);
+const b64 = JSON.parse(await (await fetch('../assets/concorde.json')).text())[0];
+const buf = Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
+const gltf = await new GLTFLoader().parseAsync(buf, '');
+const root = gltf.scene; scene.add(root); root.updateMatrixWorld(true);
+root.traverse(o => { if (o.isMesh) { o.material.metalness = 0; o.material.side = THREE.DoubleSide; } });
+const box = new THREE.Box3().setFromObject(root);
+const info = { all: [box.min.toArray(), box.max.toArray()], nodes: {} };
+root.traverse(o => { if (o.isMesh) { const b = new THREE.Box3().setFromObject(o); info.nodes[o.name + ' <' + o.parent.name + ' <' + o.parent.parent?.name + '> ' + o.material.name] = [b.min.toArray().map(v => +v.toFixed(2)), b.max.toArray().map(v => +v.toFixed(2))]; } });
+window.info = info; window.root = root; window.THREE = THREE;
+window.view = (dir, up = [0, 1, 0], show = null, zoom = 1, center = null) => {
+  root.traverse(o => { if (o.isMesh) o.visible = !show || show.some(s => (o.name + o.parent.name + o.parent.parent?.name + o.material.name).includes(s)); });
+  const c = center ? new THREE.Vector3(...center) : box.getCenter(new THREE.Vector3()), s = box.getSize(new THREE.Vector3()).length() / 2 / zoom;
+  const a = innerWidth / innerHeight;
+  const cam = new THREE.OrthographicCamera(-s * a, s * a, s, -s, 0.01, 1000);
+  cam.position.copy(c).addScaledVector(new THREE.Vector3(...dir).normalize(), 200); cam.up.set(...up); cam.lookAt(c);
+  r.render(scene, cam);
+};
+window.ready = true;
+</script>
+</body></html>

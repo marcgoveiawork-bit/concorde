@@ -127,7 +127,7 @@ async function drawPoster() {
   try { await document.fonts.load('400 200px Anton'); } catch {}
   const W = 1430, H = 2000, c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
-  g.fillStyle = '#08162b'; g.fillRect(0, 0, W, H);
+  // transparent background: only the type is printed, so the sheet has no visible edge on the studio floor
   const FONT = px => `400 ${px}px Anton, Impact, "Arial Narrow", sans-serif`;
   // draw `text` filling `width`, its capitals spanning top..bottom (squashed or stretched vertically to fit)
   const big = (text, top, bottom, width) => {
@@ -151,9 +151,9 @@ async function drawPoster() {
   posterMat.map = posterMat.emissiveMap = t; posterMat.needsUpdate = true;
 }
 
-// Blueprint scene: the white linework (extracted from a blueprint scan) on a screen pinned to the camera,
+// Blueprint scene: white linework drawn from the model itself (tools/blueprint.html) on a screen pinned to the camera,
 // sized so the whole sheet fits the window. state.bpY slides it up and out of view.
-const BP_ASPECT = 2020 / 1314, BP_DIST = 40;                        // far behind the jet
+const BP_ASPECT = 2400 / 1560, BP_DIST = 40;                        // far behind the jet
 const bpMat = new THREE.MeshBasicMaterial({ color: 0xd8e6ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
 const blueprint = new THREE.Mesh(new THREE.PlaneGeometry(BP_ASPECT, 1), bpMat);
 blueprint.renderOrder = -1;
@@ -174,37 +174,30 @@ async function loadBlueprint() {
 }
 
 // The jet. `jet` is flown by the story; `model` holds the Sketchfab scene, turned and scaled so that
-// the jet is 10 units long, nose toward +Z, up +Y. Everything else on the jet (anchors, flames) is placed
-// directly in those jet units.
+// the aircraft is 10 units long, nose toward +Z, up +Y. Points on the aircraft (anchors, nozzles, the nose
+// hinge) are listed in the model's own raw coordinates (as measured with tools/inspect.html: nose toward -Z,
+// about 60 units long) and converted to jet units once the model has loaded.
 const jet = new THREE.Group(), model = new THREE.Group();
 jet.add(model); scene.add(jet);
+const raw = p => model.localToWorld(new THREE.Vector3(...p));      // raw model point -> jet units (jet at rest)
 
-// Feature points for the exterior tour (jet units). The camera key for each sits on the same side.
+// Feature points for the exterior tour (raw model units). The camera key for each sits on the same side.
 const ANCHORS = {
-  spike: [-1.285, -0.22, 0.05],
-  chine: [-0.46, -0.2, 1.6],
-  cockpit: [0, 0.06, 2.95],
-  fins: [1.18, 0.5, -3.46],
-  nozzle: [1.325, -0.155, -4.1],
+  nose: [0, 1.5, -28.6],              // droop nose, ahead of the hinge
+  wing: [-9.3, 1.0, 6.2],             // ogee leading edge
+  intake: [-5.2, 0.45, 3.6],          // left intake mouth
+  nozzle: [-5.2, 0.6, 15.4],          // left nacelle's nozzles
+  tail: [0, 2.6, 22.5],               // rear fuselage (aft trim tank)
 };
 const anchors = {};
-for (const [k, p] of Object.entries(ANCHORS)) { anchors[k] = new THREE.Object3D(); anchors[k].position.set(...p); jet.add(anchors[k]); }
+for (const k of Object.keys(ANCHORS)) { anchors[k] = new THREE.Object3D(); jet.add(anchors[k]); }
 
-// Heat glow: an additive fresnel shell drawn over the airframe.
+// Heat glow: an additive fresnel shell (kept from the template; Concorde's skin heat doesn't glow, so heat stays 0).
 const heatU = { uHeat: { value: 0 } };
-const heatMat = new THREE.ShaderMaterial({
-  uniforms: heatU, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
-  vertexShader: `varying vec3 vN; varying vec3 vV;
-    void main(){ vec4 mv = modelViewMatrix * vec4(position,1.); vN = normalMatrix * normal; vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `uniform float uHeat; varying vec3 vN; varying vec3 vV;
-    void main(){
-      if (dot(vN, vN) < 1e-10) discard;   // no usable normal: draw nothing rather than a NaN pixel
-      float f = pow(1. - abs(dot(normalize(vN), vV)), 3.2);
-      vec3 c = mix(vec3(.9,.18,.03), vec3(1.,.55,.25), f) * f * uHeat * 0.9; gl_FragColor = vec4(c, 1.); }`,
-});
 
-// Afterburner: two cones (outer orange, inner hot core) + shock diamonds, per engine. Jet units.
-const FLAME_LEN = 2.4;
+// Reheat: two cones (outer orange, inner hot core) + shock diamonds, per engine. Jet units.
+const NOZZLES = [[-5.88, 0.6, 15.45], [-4.57, 0.6, 15.45], [4.55, 0.6, 15.45], [5.85, 0.6, 15.45]]; // raw
+const FLAME_LEN = 1.7, FLAME_R = 0.1;
 const flameU = { uI: { value: 0 }, uT: { value: 0 }, uGreen: { value: 0 } };
 function flameMat(inner) {
   return new THREE.ShaderMaterial({
@@ -215,47 +208,123 @@ function flameMat(inner) {
     fragmentShader: `uniform float uI, uInner, uGreen, uT; varying float vT;
       void main(){ float a = pow(clamp(vT,0.,1.), uInner > .5 ? 2.5 : 1.4) * uI;
         vec3 c = mix(mix(vec3(1.,.32,.08), vec3(1.,.62,.3), vT), vec3(.75,.85,1.), uInner);
-        c = mix(c, vec3(.35,1.,.45), uGreen);                        // triethylborane ignition flash
+        c = mix(c, vec3(.35,1.,.45), uGreen);                        // (green ignition flash: unused on Concorde)
         gl_FragColor = vec4(c * a * (uInner > .5 ? 1.15 : .6) * (.9 + .1 * sin(uT * 60.)), 1.); }`,
   });
 }
 const diamondTex = radialTexture([[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,190,120,.6)'], [1, 'rgba(255,120,40,0)']]);
 const flames = [], diamonds = [];
 const flameLight = new THREE.PointLight(0xff7a30, 0, 30, 1.6);
-flameLight.position.set(0, -0.15, -4.8);
 jet.add(flameLight);
-for (const x of [-1.325, 1.325]) {
-  const g = new THREE.Group();
-  g.position.set(x, -0.155, -4.1);
-  g.rotation.x = -Math.PI / 2;                          // cones are built along +Y; point them backwards (-Z)
-  const outer = new THREE.Mesh(new THREE.ConeGeometry(0.2, FLAME_LEN, 32, 1, true), flameMat(false));
-  const inner = new THREE.Mesh(new THREE.ConeGeometry(0.1, FLAME_LEN, 24, 1, true), flameMat(true));
-  for (const m of [outer, inner]) { m.position.y = FLAME_LEN / 2; g.add(m); }   // wide base at the nozzle, tip trailing behind
-  for (let i = 0; i < 4; i++) {
-    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
-    s.position.y = 0.33 + i * 0.36; s.scale.setScalar(0.25 - i * 0.03); g.add(s); diamonds.push(s);
+function buildFlames() {
+  for (const p of NOZZLES) {
+    const g = new THREE.Group();
+    g.position.copy(raw(p));
+    g.rotation.x = -Math.PI / 2;                          // cones are built along +Y; point them backwards (-Z)
+    const outer = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R, FLAME_LEN, 32, 1, true), flameMat(false));
+    const inner = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R * 0.5, FLAME_LEN, 24, 1, true), flameMat(true));
+    for (const m of [outer, inner]) { m.position.y = FLAME_LEN / 2; g.add(m); }   // wide base at the nozzle, tip trailing behind
+    for (let i = 0; i < 4; i++) {
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
+      s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.14 - i * 0.018); g.add(s); diamonds.push(s);
+    }
+    jet.add(g); flames.push(g);
   }
-  jet.add(g); flames.push(g);
+  flameLight.position.copy(raw([0, 0.6, 17]));
 }
 
-// Landing gear: the model's gear parts, grouped into three legs that fold away on takeoff.
-const GEAR = {
-  nose: ['Sphere01', 'Sphere02', 'Box02', 'Cylinder12', 'Cylinder11', 'Object03', 'stvnos1', 'stvorknos', 'Box04', 'Box03', 'Cylinder10', 'Cylinder09', 'Box11', 'Cylinder08', 'Cylinder07', 'Torus05', 'Cylinder06', 'Torus04', 'Cylinder05'],
-  mainA: ['Torus01', 'Box05', 'Cylinder13', 'Torus03', 'Cylinder04', 'Torus02', 'Cylinder03', 'Cylinder02', 'Object09', 'Box07', 'Box06', 'Cylinder15', 'Object08', 'Cylinder14', 'Object06', 'Object04'],
-  mainB: ['Torus08', 'Box10', 'Cylinder21', 'Torus07', 'Cylinder20', 'Torus06', 'Cylinder19', 'Cylinder18', 'Object11', 'Box09', 'Box08', 'Cylinder17', 'Object10', 'Cylinder16', 'Object07', 'Object05'],
-};
-const legs = [];
+// Split a mesh's triangles into groups (by where each triangle's centre lies in raw model space), one new mesh
+// per group sharing the original vertex data. Used to separate the drooping nose and the individual gear legs,
+// which the model stores merged with their neighbours.
+function splitMesh(mesh, classify) {
+  const geo = mesh.geometry, pos = geo.attributes.position, idx = geo.index;
+  const n = idx ? idx.count : pos.count, at = i => (idx ? idx.getX(i) : i);
+  const groups = {}, a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  for (let i = 0; i < n; i += 3) {
+    a.fromBufferAttribute(pos, at(i)); b.fromBufferAttribute(pos, at(i + 1)); c.fromBufferAttribute(pos, at(i + 2));
+    const key = classify(a.add(b).add(c).divideScalar(3).applyMatrix4(mesh.matrixWorld));
+    (groups[key] ??= []).push(at(i), at(i + 1), at(i + 2));
+  }
+  const out = {};
+  for (const [key, list] of Object.entries(groups)) {
+    const g = new THREE.BufferGeometry();
+    for (const [name, attr] of Object.entries(geo.attributes)) g.setAttribute(name, attr);
+    g.setIndex(list);
+    const m = new THREE.Mesh(g, mesh.material); m.name = mesh.name + ':' + key;
+    m.position.copy(mesh.position); m.quaternion.copy(mesh.quaternion); m.scale.copy(mesh.scale);
+    mesh.parent.add(m); out[key] = m;
+  }
+  mesh.parent.remove(mesh);
+  return out;
+}
+
+// Droop nose: the skin ahead of the hinge (raw z < NOSE_HINGE.z) is bent down around the hinge, blending over
+// NOSE_BLEND so the skin stays in one piece. Done on the vertices (CPU) and only when the angle changes.
+// The visor (a separate part, plus its panes in the glass mesh) slides down into the nose to uncover the windscreen.
+const NOSE_HINGE = [0, 1.0, -26.6], NOSE_BLEND = 0.7;
+const droopers = [];                                                   // { geo, idx, rawP, rawN, M, Minv }
+let visorParts = [], droopShown = -1, visorShown = -1;
+const VISOR_DROP = [0, -0.7, -0.2];                                    // raw units: down and slightly forward
+function prepareDroop(mesh) {
+  const geo = mesh.geometry, M = mesh.matrixWorld.clone(), Minv = M.clone().invert(), N = new THREE.Matrix3().getNormalMatrix(M);
+  const pos = geo.attributes.position, nor = geo.attributes.normal, v = new THREE.Vector3(), idx = [];
+  for (let i = 0; i < pos.count; i++) if (v.fromBufferAttribute(pos, i).applyMatrix4(M).z < NOSE_HINGE[2]) idx.push(i);
+  if (!idx.length) return;
+  // quantized (Int16) positions can't leave the mesh's original bounds: switch these to plain floats
+  const toFloat = a => { const f = new Float32Array(a.count * a.itemSize); for (let i = 0; i < a.count; i++) for (let k = 0; k < a.itemSize; k++) f[i * a.itemSize + k] = a.getComponent(i, k); return new THREE.BufferAttribute(f, a.itemSize); };
+  geo.setAttribute('position', toFloat(pos));
+  if (nor) geo.setAttribute('normal', toFloat(nor));
+  const rawP = new Float32Array(idx.length * 3), rawN = new Float32Array(idx.length * 3);
+  idx.forEach((i, j) => {
+    v.fromBufferAttribute(geo.attributes.position, i).applyMatrix4(M).toArray(rawP, j * 3);
+    if (nor) v.fromBufferAttribute(geo.attributes.normal, i).applyMatrix3(N).normalize().toArray(rawN, j * 3);
+  });
+  droopers.push({ geo, idx, rawP, rawN: nor ? rawN : null, Minv, Ninv: new THREE.Matrix3().getNormalMatrix(Minv) });
+}
+const _p = new THREE.Vector3(), _n = new THREE.Vector3(), _q = new THREE.Quaternion(), _ax = new THREE.Vector3(1, 0, 0);
+const visorDrop = new THREE.Vector3(...VISOR_DROP);
+function updateNose(droopDeg, visorDown) {
+  if (Math.abs(droopDeg - droopShown) > 0.02) {
+    droopShown = droopDeg;
+    const ang = -THREE.MathUtils.degToRad(droopDeg), [hx, hy, hz] = NOSE_HINGE;   // raw nose points -Z: a negative turn about X lowers it
+    for (const d of droopers) {
+      const P = d.geo.attributes.position, Nn = d.geo.attributes.normal;
+      d.idx.forEach((i, j) => {
+        const k = j * 3, w = smooth(clamp01((hz - d.rawP[k + 2]) / NOSE_BLEND));
+        _q.setFromAxisAngle(_ax, ang * w);
+        _p.set(d.rawP[k] - hx, d.rawP[k + 1] - hy, d.rawP[k + 2] - hz).applyQuaternion(_q).add(_n.set(hx, hy, hz)).applyMatrix4(d.Minv);
+        P.setXYZ(i, _p.x, _p.y, _p.z);
+        if (d.rawN) { _n.fromArray(d.rawN, k).applyQuaternion(_q).applyMatrix3(d.Ninv).normalize(); Nn.setXYZ(i, _n.x, _n.y, _n.z); }
+      });
+      P.needsUpdate = true; if (Nn) Nn.needsUpdate = true;
+    }
+  }
+  if (Math.abs(visorDown - visorShown) > 0.002) {
+    visorShown = visorDown;
+    for (const v of visorParts) v.mesh.position.copy(v.up).add(_p.copy(visorDrop).applyMatrix3(v.toLocal).multiplyScalar(visorDown));
+  }
+}
+
+// Landing gear: legs (split out of the merged gear meshes) that fold and shrink into their bays on takeoff.
+// The model has gear doors: the open doors show while any gear is out, the closed ones once it is stowed,
+// so (unlike the SR-71) the camera is free to look at the underside in flight.
+const legOf = p => (p.z < -8 ? 'nose' : p.z > 15 ? 'tail' : p.x < 0 ? 'mainL' : 'mainR');
+const legs = [], doorsOpen = [], doorsClosed = [];
 function buildGear(root) {
-  for (const [leg, names] of Object.entries(GEAR)) {
-    const parts = names.map(n => root.getObjectByName(n)).filter(Boolean);
-    if (!parts.length) continue;
-    const box = new THREE.Box3(); parts.forEach(p => box.expandByObject(p));
+  const parts = {};
+  const gearMeshes = [];
+  root.getObjectByName('LandingGear_4_14').traverse(o => { if (o.isMesh) gearMeshes.push(o); });
+  for (const m of gearMeshes) for (const [k, sub] of Object.entries(splitMesh(m, legOf))) (parts[k] ??= []).push(sub);
+  root.getObjectByName('LGCoversOpen_6_18').traverse(o => { if (o.isMesh) doorsOpen.push(o); });
+  root.getObjectByName('LGCoversClosed_5_16').traverse(o => { if (o.isMesh) doorsClosed.push(o); });
+  for (const [leg, list] of Object.entries(parts)) {
+    const box = new THREE.Box3(); list.forEach(p => box.expandByObject(p, true));
     const pivot = new THREE.Group();
     const c = box.getCenter(new THREE.Vector3());
-    pivot.position.set(c.x, box.max.y, c.z);           // fold from the top of the leg, inside the body
-    jet.add(pivot); pivot.updateMatrixWorld(true);
-    parts.forEach(p => pivot.attach(p));               // keep each part where it is in the world
-    legs.push({ pivot, side: leg === 'nose' ? 0 : Math.sign(c.x) });
+    pivot.position.set(c.x, box.max.y, c.z);           // fold from the top of the leg, inside the body (raw units)
+    root.add(pivot); pivot.updateMatrixWorld(true);
+    list.forEach(p => pivot.attach(p));                // keep each part where it is
+    legs.push({ pivot, side: leg === 'nose' || leg === 'tail' ? 0 : Math.sign(c.x) });
   }
 }
 function updateGear(g) {
@@ -263,14 +332,17 @@ function updateGear(g) {
     const t = 1 - g;                                     // 0 = down, 1 = stowed
     // fold a little and shrink toward the top of the leg (the gear bay), so no part ever rises
     // above the bay and pokes through the top of the airframe
-    if (side === 0) pivot.rotation.x = -t * 0.55;            // nose leg tips forward
+    if (side === 0) pivot.rotation.x = t * 0.55;             // nose and tail legs tip forward (raw nose is -Z)
     else pivot.rotation.z = -side * t * 0.55;                // main legs tip inward
     pivot.scale.setScalar(Math.max(0.001, 1 - smooth(t)));
     pivot.visible = g > 0.01;
   }
+  const out = g > 0.04;
+  doorsOpen.forEach(d => { d.visible = out; });
+  doorsClosed.forEach(d => { d.visible = !out; });
 }
 
-// Post-processing: bloom makes flames, limb and heat glow bleed like a camera lens.
+// Post-processing: bloom makes the reheat flames bleed like a camera lens.
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.5, 0.92);
@@ -282,9 +354,10 @@ const DEFAULT = {
   cam: [8, 2, 10], look: [0, 0, 0], fov: 32,     // camera position, what it looks at, lens
   yaw: 0, pitch: 0, roll: 0, jy: 0, jz: 0,      // jet attitude and position (pitch < 0 = nose up)
   floor: 1, gear: 1, speed: 0,                  // studio floor, landing gear (1 = down), speed streaks
+  droop: 5, visor: 1,                           // nose droop in degrees (0, 5 or 12.5), visor (1 = lowered)
   poster: 0, bp: 0, bpY: 0,                     // opening poster type, blueprint backdrop (+ how far it has scrolled away)
   vis: 1,                                       // 0 hides the jet (used while it is repositioned off screen)
-  env: 1, key: 2, rim: 2, exposure: 1, bloom: 0.35,
+  env: 1, key: 2, rim: 2, exposure: 1, bloom: 0.25,
   flame: 0, green: 0, heat: 0, shake: 0,
   shift: 0,                                     // slide the jet sideways in frame, away from the text (-1..1)
   lift: 1,                                      // on phones, lift the picture above the text (0 = keep centred)
@@ -292,35 +365,37 @@ const DEFAULT = {
   pz: 1,                                        // on phones, multiply the camera distance (pull back for wide shots)
 };// Each key inherits everything from the key before it, so it only lists what changes.
 // `look` may name an anchor; `cam` is then an offset from that anchor.
-// Rule: once the gear is up the camera stays above the jet, because the model has no gear doors.
+// The model has gear doors, so the camera may look at the underside once the gear is up.
 const KEYS = {
   poster:   { cam: [0, 25, -0.3], look: [0, 0, 0], fov: 32, jz: -19, poster: 1, env: 0.5, key: 3.2, rim: 1.2, bloom: 0, lift: 0, low: 1 },
   arrive:   { jz: 0, shift: 0.34 },
-  titanium: { cam: [-9.5, 3.4, -6.5], look: [0, -0.2, 0], fov: 32, poster: 0, low: 0, env: 1, key: 2.2, rim: 2, bloom: 0.35, shift: -0.2, lift: 1 },
+  airframe: { cam: [-11.5, 4, -8], look: [0, -0.2, 0], fov: 32, poster: 0, low: 0, env: 1, key: 2.2, rim: 2, bloom: 0.25, shift: -0.2, lift: 1 },
   // blueprint: the text pins (see .pin in the HTML) while the sheet is shown whole, then slides up and away
   blueprint:{ at: ['blueprint', 0, 0.3], cam: [0, 0.75, 10], look: [0, 0.15, 0], fov: 32, bp: 1, bpY: 0, floor: 0, env: 1.1, key: 2, rim: 2.4, shift: 0.2 },
   bpout:    { at: ['blueprint', 0.85, 1], bpY: 1 },
-  // spike leaves bpY at 1: once the blueprint has slid away it never slides back in while scrolling forward
-  spike:    { look: 'spike', cam: [-3.4, 1.1, 3.2], fov: 30, bp: 0, floor: 1, rim: 1.2, bloom: 0.25, shift: -0.22 },
-  chine:    { look: 'chine', cam: [-2.6, 2.8, 3.6], shift: 0.22 },
-  cockpit:  { look: 'cockpit', cam: [2.6, 1.5, 2.6], shift: -0.22 },
-  fins:     { look: 'fins', cam: [4.2, 2.4, -3.2], fov: 32, shift: 0.22 },
-  engines:  { look: 'nozzle', cam: [3.0, 0.4, -4.6], fov: 34, rim: 2.6, key: 1.6, env: 2.4, shift: -0.22 },
-  // takeoff chapter is pinned: "Lit by a green flash" holds while the engines burn green. The flame turns
-  // orange just as the next chapter's text (cost) takes over, and the jet spools up and lifts off under it.
-  ignite:   { at: ['takeoff', 0, 1.4], look: [0, 0, -2], cam: [-4.5, 1.4, -12], fov: 38, flame: 0.7, green: 1, bloom: 0.9, env: 0.9, key: 1, shift: 0.15 },
-  spool:    { at: ['cost', -0.25], flame: 1, green: 0 },
-  // low side view (lit side, just below the wings) while the gear comes up, so the retraction is seen side-on
-  liftoff:  { at: ['cost', 0.4], look: [0, 1.1, 0.3], cam: [21, 0.3, 4.3], fov: 33, shift: -0.36, pz: 1.4, jy: 1.1, pitch: -0.1, gear: 0.5, floor: 0.3, speed: 0.5, shake: 0.6, key: 1.6, env: 1.2 },
-  takeoff:  { at: ['cost', 0.85, 1], look: [0, 2.2, 2], cam: [-6, 5.5, -14], fov: 40, pz: 1, floor: 0, gear: 0, speed: 1, flame: 1, green: 0, jy: 2.2, pitch: -0.12, env: 0.9, key: 1.2, rim: 2.5, bloom: 0.9, shake: 1, shift: -0.15 },
-  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, env: 0.8, key: 1.4, bloom: 0.8, shake: 0.4, shift: -0.12 },
-  mach3:    { look: [0, 2.2, 0.5], cam: [22, 6, 6], fov: 30, speed: 1.4, flame: 0.75, heat: 0.8, pitch: 0, roll: 0, env: 0.7, key: 1.6, rim: 3, bloom: 0.8, shake: 0.15, shift: 0.3 },
-  records:  { look: [0, 2.2, 0], cam: [-9, 22, -20], fov: 34, speed: 0.8, heat: 0.7, roll: -0.08, shift: 0.42 },
-  outro:    { look: [0, 3, 30], cam: [3, 10, -46], fov: 30, speed: 1, flame: 1, heat: 0.6, jz: 130, jy: 4, roll: 0, pitch: -0.05, bloom: 0.9, shift: 0 },
-  // the jet shrinks into the distance and is gone...
+  // nose leaves bpY at 1: once the blueprint has slid away it never slides back in while scrolling forward
+  nose:     { look: 'nose', cam: [-2.4, 0.5, 2.2], fov: 30, bp: 0, floor: 1, rim: 1.2, droop: 12.5, shift: -0.22, pz: 1.5 },
+  wing:     { look: 'wing', cam: [-8, 8.5, 6.5], droop: 5, shift: 0.22 },
+  intakes:  { look: 'intake', cam: [-2.6, -0.4, 2.4], shift: -0.22 },
+  engines:  { look: 'nozzle', cam: [-4.6, 0.7, -5.2], fov: 32, rim: 2.6, key: 1.6, env: 1.6, shift: 0.22 },
+  tail:     { look: 'tail', cam: [6.5, 2.4, -5], shift: -0.22 },
+  // takeoff chapter is pinned: the four engines light up in reheat under "Four engines in reheat", and the
+  // jet rolls and lifts off while the next chapter's text (cost) takes over.
+  ignite:   { at: ['takeoff', 0, 1.4], look: [0, 0, -2], cam: [-4.5, 1.4, -12], fov: 38, pz: 1, flame: 0.8, bloom: 0.8, env: 0.9, key: 1, shift: 0.15 },
+  spool:    { at: ['cost', -0.25], flame: 1 },
+  // low side view while the gear comes up and the doors close
+  liftoff:  { at: ['cost', 0.4], look: [0, 1.1, 0.3], cam: [21, 0.3, 4.3], fov: 33, shift: -0.36, pz: 1.4, jy: 1.1, pitch: -0.12, gear: 0.5, floor: 0.3, speed: 0.5, shake: 0.6, key: 1.6, env: 1.2 },
+  takeoff:  { at: ['cost', 0.85, 1], look: [0, 2.2, 2], cam: [-6, 5.5, -14], fov: 40, pz: 1, floor: 0, gear: 0, speed: 1, flame: 1, jy: 2.2, pitch: -0.14, env: 0.9, key: 1.2, rim: 2.5, bloom: 0.8, shake: 1, shift: -0.15 },
+  // climbing out the nose comes up and the visor closes; reheat stays lit through the sound barrier
+  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, droop: 0, visor: 0, flame: 0.6, env: 0.8, key: 1.4, bloom: 0.6, shake: 0.4, shift: -0.12 },
+  // cruise: reheat off (Concorde cruised at Mach 2 without it), streaks rushing past
+  cruise:   { look: [0, 2.2, 0.5], cam: [22, 6, 6], fov: 30, speed: 1.4, flame: 0, pitch: 0, roll: 0, env: 0.8, key: 1.6, rim: 3, bloom: 0.3, shake: 0.15, shift: 0.3 },
+  records:  { look: [0, 2.2, 0], cam: [-9, 22, -20], fov: 34, speed: 0.8, roll: -0.08, shift: 0.42 },
+  outro:    { look: [0, 3, 30], cam: [3, 10, -46], fov: 30, speed: 1, jz: 130, jy: 4, roll: 0, pitch: -0.05, bloom: 0.4, shift: 0 },
+  // the aircraft shrinks into the distance and is gone...
   gone:     { between: ['outro', 'finaleIn', 0.45], jz: 420, jy: 8, vis: 0 },
   // ...is quietly moved off the left edge of the next shot...
-  repo:     { between: ['outro', 'finaleIn', 0.85], look: [0, -0.55, 0], cam: [-18.5, 10.2, -1], fov: 30, jz: -70, jy: 0, roll: 0.35, pitch: -0.08, heat: 0, flame: 0.9, speed: 0.4, lift: 0, pz: 1.75, vis: 0 },
+  repo:     { between: ['outro', 'finaleIn', 0.85], look: [0, -0.55, 0], cam: [-25, 13.8, -1.35], fov: 30, jz: -70, jy: 0, roll: 0.35, pitch: -0.08, flame: 0, speed: 0.4, lift: 0, pz: 1.75, vis: 0 },
   // ...and once the closing poster has scrolled into place, flies in from the left into the gap in the type
   finaleIn: { at: ['finale', 0], vis: 1 },
   finale:   { at: ['finale', 0.45, 1], jz: 0, speed: 0.25 },  // (repo sets pz for phones)
@@ -467,7 +542,7 @@ function updateOverlays() {
 /* --------------------------------------------------------------- 4. RENDER */
 const look = new THREE.Vector3(), tmp = new THREE.Vector3();
 let floorY = 0, last = performance.now(), loaded = false;
-const jetUp = new THREE.Vector3(), toCam = new THREE.Vector3();function frame(now) {
+function frame(now) {
   requestAnimationFrame(frame);
   lenis?.raf(now);
   if (!loaded) return;
@@ -489,6 +564,7 @@ const jetUp = new THREE.Vector3(), toCam = new THREE.Vector3();function frame(no
   jet.position.set(0, s.jy + Math.sin(t * 0.9) * 0.06 * air, s.jz);
   jet.rotation.set(s.pitch + Math.sin(t * 0.7) * 0.01 * air, s.yaw, s.roll + Math.sin(t * 0.5) * 0.02 * air, 'YXZ');
   updateGear(s.gear);
+  updateNose(s.droop, s.visor);
   jet.visible = s.vis > 0.5;
 
   // camera: orbit around the look point, with a little handheld shake
@@ -498,13 +574,6 @@ const jetUp = new THREE.Vector3(), toCam = new THREE.Vector3();function frame(no
     look.x + r * Math.cos(s.el) * Math.sin(s.az) + Math.sin(t * 23) * shake,
     look.y + r * Math.sin(s.el) + Math.sin(t * 31 + 1) * shake,
     look.z + r * Math.cos(s.el) * Math.cos(s.az));
-  // safety net for the rule above: with the gear up, never let the camera see the jet's underside
-  if (s.gear < 0.1) {
-    jetUp.set(0, 1, 0).applyQuaternion(jet.quaternion);
-    toCam.subVectors(camera.position, jet.position);
-    const need = toCam.length() * 0.1 - toCam.dot(jetUp);          // keep at least ~6 degrees above the wing plane
-    if (need > 0) camera.position.addScaledVector(jetUp, need);
-  }
   camera.lookAt(look);
   const W = innerWidth, H = innerHeight, aspect = W / H, narrow = W < 700;
   camera.fov = aspect < 1 ? THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(s.fov) / 2) * Math.min(2.2, 0.95 / aspect))) : s.fov;
@@ -544,59 +613,81 @@ requestAnimationFrame(frame);
 // The model ships as base64 inside a JSON file (the page host serves .json but not .glb).
 async function fetchModel(url) {
   const res = await fetch(url);
-  const total = +res.headers.get('content-length') || 3.3e6, reader = res.body.getReader(), chunks = [];
+  const total = +res.headers.get('content-length') || 1.77e7, reader = res.body.getReader(), chunks = [];
   let got = 0;
   for (;;) {
     const { done, value } = await reader.read(); if (done) break;
     chunks.push(value); got += value.length;
-    window.loader.set(got / total * 0.75);
+    window.loader.set(Math.min(1, got / total) * 0.75);
   }
   const b64 = JSON.parse(await new Blob(chunks).text())[0];
   return Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
 }
 function onFail(err) { window.loader.msg('The model could not load: ' + (err?.message || err)); }
-fetchModel('assets/sr71.json').then(buf => new GLTFLoader().parse(buf, '', onModel, onFail)).catch(onFail);
+fetchModel('assets/concorde.json').then(buf => new GLTFLoader().parse(buf, '', onModel, onFail)).catch(onFail);
 
-const glass = new THREE.MeshPhysicalMaterial({ color: 0x0c1520, metalness: 0.2, roughness: 0.04, clearcoat: 1, envMapIntensity: 2, transparent: true, opacity: 0.8 });
+const glass = new THREE.MeshPhysicalMaterial({ color: 0x0c1520, metalness: 0.2, roughness: 0.04, clearcoat: 1, envMapIntensity: 2, transparent: true, opacity: 0.85 });
 async function onModel(gltf) {
-  const root = gltf.scene;
-  // Sketchfab wraps the model in a node with a display rotation; drop it, then stand the model up.
-  const wrap = root.children[0];
-  wrap.matrix.identity(); wrap.matrix.decompose(wrap.position, wrap.quaternion, wrap.scale);
-  wrap.rotation.x = -Math.PI / 2;
-  model.add(root);
-  model.rotation.y = Math.PI;                                 // the model's nose points -Z; turn it to +Z
-  jet.updateMatrixWorld(true);
-  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
-  model.scale.setScalar(10 / size.z);                         // 10 units nose to tail
-  jet.updateMatrixWorld(true);
-  model.position.sub(new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3()));
-  jet.updateMatrixWorld(true);
+  const root = gltf.scene;                                    // already Y up; nose toward -Z
+  root.updateMatrixWorld(true);
 
-  // Materials: keep the model's painted textures (markings, panel lines) but give them a clear-coated,
-  // slightly metallic finish so they respond to the studio lighting. See-through parts become tinted glass.
+  // Drooping nose: prepare every airframe mesh that reaches ahead of the hinge (raw coordinates, before the
+  // model is moved). The visor's panes live in the glass mesh: split them out so they move with the visor.
+  const isGear = o => { for (let p = o; p; p = p.parent) if (/^(LandingGear|LGCovers|LGInside)/.test(p.name)) return true; return false; };
+  const glassMesh = []; root.traverse(o => { if (o.isMesh && o.material.name === 'Glass') glassMesh.push(o); });
+  const visorMeshes = [root.getObjectByName('Object_64')];
+  for (const g of glassMesh) {
+    const parts = splitMesh(g, p => (p.z < -24.65 && p.z > -26.8 && p.y > 2.3 ? 'visor' : 'rest'));
+    if (parts.visor) visorMeshes.push(parts.visor);
+  }
+  root.updateMatrixWorld(true);
+  for (const m of visorMeshes) {
+    const toLocal = new THREE.Matrix3().setFromMatrix4(m.parent.matrixWorld).invert();   // raw direction -> parent space
+    visorParts.push({ mesh: m, up: m.position.clone(), toLocal });
+  }
+  const airframe = [];
+  root.traverse(o => { if (o.isMesh && !isGear(o) && !visorMeshes.includes(o)) airframe.push(o); });
+  airframe.forEach(prepareDroop);
+  buildGear(root);
+
+  model.add(root);
+  model.rotation.y = Math.PI;                                 // turn the nose to +Z
+  const LENGTH = 31.73 + 28.55, CENTER = [0, 2.2, -1.59];     // raw: nose tip to tail cone, centre of the airframe
+  model.scale.setScalar(10 / LENGTH);                         // 10 units nose to tail
+  model.updateMatrix();
+  model.position.copy(new THREE.Vector3(...CENTER).applyMatrix4(model.matrix)).negate();
+  jet.updateMatrixWorld(true);
+  for (const [k, p] of Object.entries(ANCHORS)) anchors[k].position.copy(raw(p));
+  buildFlames();
+
+  // Materials: keep the model's painted textures (livery, panel lines) on a glossy white-paint finish so they
+  // respond to the studio lighting. Glass is tinted; metal parts (engines, gear) are a little more metallic.
   const meshes = [];
   root.traverse(o => { if (o.isMesh) meshes.push(o); });
+  const made = new Map();
   for (const o of meshes) {
     const m = o.material;
-    if (m.transparent) { o.material = glass; continue; }
-    o.material = new THREE.MeshPhysicalMaterial({
-      map: m.map, color: m.color, roughness: 0.42, metalness: 0.2, clearcoat: 0.45, clearcoatRoughness: 0.25,
-    });
-    if (o.geometry.attributes.normal) o.add(new THREE.Mesh(o.geometry, heatMat));
+    if (m.name === 'Glass') { o.material = glass; continue; }
+    if (!made.has(m)) {
+      const metal = /Engines|gear|wheel/.test(m.name);
+      made.set(m, new THREE.MeshPhysicalMaterial({
+        map: m.map, color: m.color, roughness: metal ? 0.45 : 0.38, metalness: metal ? 0.55 : 0.05, clearcoat: metal ? 0.2 : 0.6, clearcoatRoughness: 0.2,
+      }));
+    }
+    o.material = made.get(m);
   }
   meshes.forEach(o => { o.castShadow = true; o.frustumCulled = false; }); // never culled: the jet is always drawn when visible
   window.loader.set(0.8);
 
-  floorY = new THREE.Box3().setFromObject(model).min.y;      // wheels on the floor (measure before the gear is regrouped)
-  buildGear(root);
+  jet.updateMatrixWorld(true);
+  floorY = new THREE.Box3().setFromObject(jet, true).min.y;   // wheels on the floor
   await Promise.all([drawPoster(), loadBlueprint().catch(e => console.warn('blueprint', e))]);
   window.loader.set(0.9); window.loader.msg('Warming up the engines');
   await warmUp();
   layout();
   loaded = true;
   window.loader.done();
-  // handy for debugging in the browser console: goTo('mach3')
+  // handy for debugging in the browser console: goTo('cruise')
   window.goTo = key => { const sec = sections.find(s => s.dataset.key === key); const y = sec.getBoundingClientRect().top + scrollY + sec.offsetHeight / 2 - innerHeight / 2; lenis ? lenis.scrollTo(y, { immediate: true }) : scrollTo(0, y); };
   window.scrollToY = f => { const y = f * (document.documentElement.scrollHeight - innerHeight); lenis ? lenis.scrollTo(y, { immediate: true }) : scrollTo(0, y); };
   window.goKey = (name, f = 0.5) => { const st = stops.find(s => s.name === name); const y = st.y0 < -1e8 ? 0 : st.y1 > 1e8 ? st.y0 + 50 : lerp(st.y0, st.y1, f); lenis ? lenis.scrollTo(y, { immediate: true }) : scrollTo(0, y); };

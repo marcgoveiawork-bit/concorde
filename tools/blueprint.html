@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head><body style="margin:0;background:#000">
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/"}}</script>
+<script type="module">
+// Draws the blueprint sheet (white linework on transparent) from the model itself: side, top and front views
+// with hidden lines removed, plus a title block. tools/make-blueprint.js saves the result as assets/blueprint.json.
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+const W = 2400, H = 1560;                                    // sheet size (aspect is BP_ASPECT in main.js)
+const b64 = JSON.parse(await (await fetch('../assets/concorde.json')).text())[0];
+const gltf = await new GLTFLoader().parseAsync(Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer, '');
+const root = gltf.scene; root.updateMatrixWorld(true);
+// gear down (as drawn on a general-arrangement sheet), closed covers and interior bits hidden
+const hide = /^(LGCoversClosed|LGInsideCovers|RandomStuff)/;
+const scene = new THREE.Scene(), solid = new THREE.Scene();      // linework, and a filled silhouette for the outline
+const fill = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+const occluder = new THREE.MeshBasicMaterial({ colorWrite: false, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, side: THREE.DoubleSide });
+const lineMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+root.traverse(o => {
+  if (!o.isMesh) return;
+  for (let p = o; p; p = p.parent) if (hide.test(p.name)) return;
+  const m = new THREE.Mesh(o.geometry, occluder); m.matrixAutoUpdate = false; m.matrix.copy(o.matrixWorld); scene.add(m);
+  const f = new THREE.Mesh(o.geometry, fill); f.matrixAutoUpdate = false; f.matrix.copy(o.matrixWorld); solid.add(f);
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry, 32), lineMat);
+  e.matrixAutoUpdate = false; e.matrix.copy(o.matrixWorld); scene.add(e);
+});
+const box = new THREE.Box3().setFromObject(scene, true), c = box.getCenter(new THREE.Vector3());
+const r = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+r.setClearColor(0x000000, 0);
+const sheet = document.createElement('canvas'); sheet.width = W; sheet.height = H;
+const g = sheet.getContext('2d');
+// view: direction the camera looks from, up vector, world half-width shown, pixel rect on the sheet
+function draw(dir, up, halfW, [x, y, w, h]) {
+  r.setSize(w, h);
+  const halfH = halfW * h / w;
+  const cam = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, 0.1, 500);
+  cam.position.copy(c).addScaledVector(new THREE.Vector3(...dir).normalize(), 200); cam.up.set(...up); cam.lookAt(c);
+  r.render(scene, cam);
+  g.drawImage(r.domElement, x, y);
+  // outline: every pixel on the edge of the filled silhouette, drawn 2 px wide
+  r.render(solid, cam);
+  const t = document.createElement('canvas'); t.width = w; t.height = h;
+  const tg = t.getContext('2d'); tg.drawImage(r.domElement, 0, 0);
+  const src = tg.getImageData(0, 0, w, h).data, out = tg.createImageData(w, h), o = out.data;
+  const on = (i, j) => i >= 0 && j >= 0 && i < w && j < h && src[(j * w + i) * 4 + 3] > 128;
+  for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
+    if (!on(i, j)) continue;
+    if (on(i - 1, j) && on(i + 1, j) && on(i, j - 1) && on(i, j + 1) && on(i - 2, j) && on(i + 2, j) && on(i, j - 2) && on(i, j + 2)) continue;
+    const k = (j * w + i) * 4; o[k] = o[k + 1] = o[k + 2] = 255; o[k + 3] = 255;
+  }
+  tg.putImageData(out, 0, 0); g.drawImage(t, x, y);
+}
+draw([1, 0, 0], [0, 1, 0], 31, [80, 90, 2240, 600]);         // side elevation, nose to the right
+draw([0, 1, 0], [-1, 0, 0], 31, [80, 640, 1480, 860]);         // plan view, nose to the right
+draw([0, 0, -1], [0, 1, 0], 13.2, [1600, 700, 720, 520]);      // front view
+// frame and title block, in the same white
+g.strokeStyle = '#fff'; g.fillStyle = '#fff'; g.lineWidth = 3;
+g.strokeRect(24, 24, W - 48, H - 48); g.lineWidth = 1.2; g.strokeRect(38, 38, W - 76, H - 76);
+const tb = [1600, 1300, 720, 200];
+g.lineWidth = 2; g.strokeRect(...tb);
+g.beginPath(); g.moveTo(tb[0], tb[1] + 92); g.lineTo(tb[0] + tb[2], tb[1] + 92); g.moveTo(tb[0] + 360, tb[1] + 92); g.lineTo(tb[0] + 360, tb[1] + tb[3]); g.stroke();
+g.textBaseline = 'middle';
+const fit = (text, weight, px, x, y, maxW) => {
+  g.font = `${weight} ${px}px "Barlow Condensed", "Arial Narrow", Arial, sans-serif`;
+  const sx = Math.min(1, maxW / g.measureText(text).width);
+  g.save(); g.translate(x, y); g.scale(sx, 1); g.fillText(text, 0, 0); g.restore();
+};
+fit('CONCORDE \u2014 GENERAL ARRANGEMENT', 700, 50, tb[0] + 22, tb[1] + 48, tb[2] - 44);
+fit('LENGTH 61.66 m \u00b7 SPAN 25.6 m', 500, 28, tb[0] + 22, tb[1] + 128, 320);
+fit('FOUR OLYMPUS 593 Mk 610', 500, 28, tb[0] + 22, tb[1] + 166, 320);
+fit('SIDE \u00b7 PLAN \u00b7 FRONT', 500, 28, tb[0] + 382, tb[1] + 128, 316);
+fit('NOT TO SCALE', 500, 28, tb[0] + 382, tb[1] + 166, 316);
+window.sheet = sheet.toDataURL('image/png');
+window.ready = true;
+</script>
+</body></html>
