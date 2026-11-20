@@ -18,6 +18,9 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// index.html loads this file as main.js?v=N; the same tag goes on the data files, so a new version is never mixed
+// with stale cached copies (GitHub Pages lets browsers cache files for 10 minutes)
+const VERSION = new URL(import.meta.url).search;
 const lerp = (a, b, t) => a + (b - a) * t;
 const clamp01 = v => Math.min(1, Math.max(0, v));
 const smooth = t => t * t * (3 - 2 * t);
@@ -203,9 +206,10 @@ async function drawPoster() {
   posterMat.map = posterMat.emissiveMap = t; posterMat.needsUpdate = true;
 }
 
-// Blueprint scene: linework drawn from the model itself (tools/blueprint.html), tinted navy on the white studio, on a screen pinned to the camera,
+// Blueprint scene: the pre-series exploded-view drawing, callouts removed (tools/clean-blueprint.py), tinted navy on the
+// white studio, on a screen pinned to the camera,
 // sized so the whole sheet fits the window. state.bpY slides it up and out of view.
-const BP_ASPECT = 2400 / 1560, BP_DIST = 40;                        // far behind the jet
+const BP_ASPECT = 1580 / 706, BP_DIST = 40;                        // far behind the jet
 const bpMat = new THREE.MeshBasicMaterial({ color: 0x1b3a72, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
 const blueprint = new THREE.Mesh(new THREE.PlaneGeometry(BP_ASPECT, 1), bpMat);
 blueprint.renderOrder = -1;
@@ -219,7 +223,7 @@ function placeBlueprint(s, W, H) {
   blueprint.position.set(offX * perPx, s.bpY * (visH + h) / 2 * 1.05, -BP_DIST);
 }
 async function loadBlueprint() {
-  const url = JSON.parse(await (await fetch('assets/blueprint.json')).text())[0];
+  const url = JSON.parse(await (await fetch('assets/blueprint.json' + VERSION)).text())[0];
   const t = await new THREE.TextureLoader().loadAsync(url);
   t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   bpMat.map = t; bpMat.needsUpdate = true;
@@ -424,7 +428,7 @@ const KEYS = {
   arrive:   { jz: 0, shift: 0.34 },
   airframe: { cam: [-11.5, 4, -8], look: [0, -0.2, 0], fov: 32, poster: 0, low: 0, env: 1, key: 2.2, rim: 2, shift: -0.2, lift: 1 },
   // blueprint: the text pins (see .pin in the HTML) while the sheet is shown whole, then slides up and away
-  blueprint:{ at: ['blueprint', 0, 0.3], cam: [0, 0.75, 10], look: [0, 0.15, 0], fov: 32, bp: 1, bpY: 0, floor: 0, env: 1.1, key: 2, rim: 2.4, shift: 0.2 },
+  blueprint:{ at: ['blueprint', 0, 0.3], cam: [0, 0.95, 14], look: [0, 0.15, 0], fov: 32, bp: 1, bpY: 0, floor: 0, env: 1.1, key: 2, rim: 2.4, shift: 0.2 },
   bpout:    { at: ['blueprint', 0.85, 1], bpY: 1 },
   // nose leaves bpY at 1: once the blueprint has slid away it never slides back in while scrolling forward
   nose:     { look: 'nose', cam: [-2.4, 0.5, 2.2], fov: 30, bp: 0, floor: 1, rim: 1.2, droop: 12.5, shift: -0.22, pz: 1.5 },
@@ -678,7 +682,7 @@ async function fetchModel(url) {
   return Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
 }
 function onFail(err) { window.loader.msg('The model could not load: ' + (err?.message || err)); }
-fetchModel('assets/concorde.json').then(buf => new GLTFLoader().parse(buf, '', onModel, onFail)).catch(onFail);
+fetchModel('assets/concorde.json' + VERSION).then(buf => new GLTFLoader().parse(buf, '', onModel, onFail)).catch(onFail);
 
 const glass = new THREE.MeshPhysicalMaterial({ color: 0x0c1520, metalness: 0.2, roughness: 0.04, clearcoat: 1, envMapIntensity: 2, transparent: true, opacity: 0.85 });
 async function onModel(gltf) {
