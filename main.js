@@ -142,6 +142,7 @@ const streaks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.018, 0.018, 1),
   new THREE.MeshBasicMaterial({ color: 0xcfd8e6, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }), STREAKS);
 const streakPos = Array.from({ length: STREAKS }, () => new THREE.Vector3((Math.random() - 0.5) * 2 * FIELD, (Math.random() - 0.5) * FIELD, (Math.random() - 0.5) * 2 * FIELD));
 streaks.frustumCulled = false;
+streaks.renderOrder = 5;                                         // over the floor layers too
 scene.add(streaks);
 const m4 = new THREE.Matrix4(), q0 = new THREE.Quaternion(), s3 = new THREE.Vector3(), v3 = new THREE.Vector3(), col = new THREE.Color();
 const wrap = (v, r) => ((v + r) % (2 * r) + 2 * r) % (2 * r) - r;
@@ -291,12 +292,13 @@ function buildFlames() {
     const inner = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R * 0.55, FLAME_LEN * 0.75, 24, 1, true), flameMat(true));
     outer.position.y = FLAME_LEN / 2; inner.position.y = FLAME_LEN * 0.375;  // wide base at the nozzle, tip trailing behind
     g.add(outer, inner);
+    outer.renderOrder = inner.renderOrder = 5;            // after the floor layers (renderOrder 1-3), or the runway paints over them
     for (let i = 0; i < 4; i++) {
       const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
-      s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.12 - i * 0.016); g.add(s); diamonds.push(s);
+      s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.12 - i * 0.016); s.renderOrder = 6; g.add(s); diamonds.push(s);
     }
     const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
-    glow.position.y = 0.06; glow.scale.setScalar(0.42); g.add(glow); glows.push(glow);
+    glow.position.y = 0.06; glow.scale.setScalar(0.42); glow.renderOrder = 6; g.add(glow); glows.push(glow);
     jet.add(g); flames.push(g);
   }
   flameLight.position.copy(raw([0, 0.6, 17]));
@@ -720,6 +722,12 @@ async function onModel(gltf) {
   const airframe = [];
   root.traverse(o => { if (o.isMesh && !isGear(o) && !visorMeshes.includes(o)) airframe.push(o); });
   airframe.forEach(prepareDroop);
+  // The model has no cockpit interior: with the visor down you would see through the windscreen and the hollow
+  // nose to the floor. A dark shell inside the flight deck (raw units, behind the hinge, inside the skin even
+  // with the nose fully drooped) stands in for the interior.
+  const cabin = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0x14171c, side: THREE.DoubleSide }));
+  cabin.position.set(0, 1.95, -24.5); cabin.scale.set(0.95, 0.8, 2.4);
+  cabin.name = 'cockpit_interior'; root.add(cabin);
   buildGear(root);
 
   model.add(root);
