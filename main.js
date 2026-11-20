@@ -165,14 +165,14 @@ function updateStreaks(dt, speed) {
 // Opening poster: thin, widely spaced type printed on the studio floor, across the red runway. Red on the white
 // floor, white where it crosses the runway. The aircraft taxis up the runway onto it and shadows it.
 const POSTER_H = 13.4, POSTER_W = POSTER_H * 0.715;                 // world units (the jet is 10 long)
-const posterMat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, emissive: 0xffffff, emissiveIntensity: 0.3 });
+const posterMat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, emissive: 0xffffff, emissiveIntensity: 0.12 });
 const poster = new THREE.Mesh(new THREE.PlaneGeometry(POSTER_W, POSTER_H), posterMat);
 poster.rotation.set(-Math.PI / 2, 0, Math.PI);                      // lie flat, readable from above with the nose pointing up-screen
 poster.receiveShadow = true;
 poster.renderOrder = 2;
 scene.add(poster);
 async function drawPoster() {
-  try { await Promise.all([document.fonts.load('200 100px Jost'), document.fonts.load('400 100px Jost')]); } catch {}
+  try { await Promise.all([document.fonts.load('300 100px Jost'), document.fonts.load('400 100px Jost'), document.fonts.load('500 100px Jost')]); } catch {}
   const W = 1430, H = 2000, c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
   const px = W / POSTER_W, rw = RUNWAY_W * px, rx0 = (W - rw) / 2, rx1 = rx0 + rw;
@@ -186,15 +186,15 @@ async function drawPoster() {
   };
   const label = (title, value, cx) => {                              // small spec block on the white floor beside the runway
     const w = (rx0 - 0) * 0.72;
-    tracked(title, cx, H * 0.335, 40, 400, w);
-    g.fillRect(cx - w / 2, H * 0.352, w, 3);
-    tracked(value, cx, H * 0.405, 62, 200, w);
+    tracked(title, cx, H * 0.335, 42, 500, w);
+    g.fillRect(cx - w / 2, H * 0.352, w, 4);
+    tracked(value, cx, H * 0.405, 64, 400, w);
   };
   const paint = () => {
-    tracked('CONCORDE', W / 2, H * 0.17, 230, 200, W * 0.94);
+    tracked('CONCORDE', W / 2, H * 0.17, 236, 300, W * 0.94);
     label('ENGINES', 'OLYMPUS 593', rx0 / 2);
     label('SPEED', 'MACH 2.04', (rx1 + W) / 2);
-    tracked('MACH 2', W / 2, H * 0.95, 230, 200, W * 0.66);
+    tracked('MACH 2', W / 2, H * 0.95, 236, 300, W * 0.66);
   };
   g.textBaseline = 'alphabetic'; g.textAlign = 'left';
   for (const [color, onRunway] of [['#c8102e', false], ['#f3f1ec', true]]) {
@@ -251,25 +251,35 @@ for (const k of Object.keys(ANCHORS)) { anchors[k] = new THREE.Object3D(); jet.a
 // Heat glow: an additive fresnel shell (kept from the template; Concorde's skin heat doesn't glow, so heat stays 0).
 const heatU = { uHeat: { value: 0 } };
 
-// Reheat: two cones (outer orange, inner hot core) + shock diamonds, per engine. Jet units.
+// Reheat: two cones (outer orange, inner hot core) + shock diamonds + a nozzle glow, per engine. Jet units.
+// The cones use normal blending so they show against the white studio too (additive light vanishes on white).
+// Their alpha fades toward the silhouette (fresnel) and in over the first few % at the nozzle lip, so they read
+// as soft gas, not solid tubes. The glow and diamonds are additive: they light up against the blue sky.
 const NOZZLES = [[-5.88, 0.6, 15.45], [-4.57, 0.6, 15.45], [4.55, 0.6, 15.45], [5.85, 0.6, 15.45]]; // raw
 const FLAME_LEN = 1.7, FLAME_R = 0.1;
 const flameU = { uI: { value: 0 }, uT: { value: 0 }, uGreen: { value: 0 } };
 function flameMat(inner) {
   return new THREE.ShaderMaterial({
     uniforms: { ...flameU, uInner: { value: inner ? 1 : 0 } }, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
-    vertexShader: `varying float vT; uniform float uT;
-      void main(){ vT = .5 - position.y / ${FLAME_LEN.toFixed(2)}; vec3 p = position; p.xz *= 1. + .06 * sin(uT * 40. + position.y * 6.);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.); }`,
-    fragmentShader: `uniform float uI, uInner, uGreen, uT; varying float vT;
-      void main(){ float a = pow(clamp(vT,0.,1.), uInner > .5 ? 2.5 : 1.4) * uI;
-        vec3 c = mix(mix(vec3(1.,.32,.08), vec3(1.,.62,.3), vT), vec3(.75,.85,1.), uInner);
-        c = mix(c, vec3(.35,1.,.45), uGreen);                        // (green ignition flash: unused on Concorde)
-        gl_FragColor = vec4(c * (uInner > .5 ? 1.15 : 1.), clamp(a * (uInner > .5 ? .9 : .75) * (.9 + .1 * sin(uT * 60.)), 0., 1.)); }`,   // normal blending: visible on white too
+    vertexShader: `varying float vT; varying vec3 vN; varying vec3 vV; uniform float uT;
+      void main(){ vT = .5 - position.y / ${FLAME_LEN.toFixed(2)}; vec3 p = position; p.xz *= 1. + .05 * sin(uT * 40. + position.y * 6.);
+        vec4 mv = modelViewMatrix * vec4(p,1.); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform float uI, uInner, uGreen, uT; varying float vT; varying vec3 vN; varying vec3 vV;
+      void main(){
+        float t = clamp(vT, 0., 1.);
+        float body = pow(t, uInner > .5 ? 2.2 : 1.3);                        // brightest at the nozzle, fading down the plume
+        float edge = pow(abs(dot(normalize(vN), vV)), 1.6);                  // soft silhouette: no hard tube outline
+        float lip = smoothstep(1., .9, t);                                   // fade in just behind the nozzle lip
+        float flick = .92 + .08 * sin(uT * 60. + vT * 9.);
+        vec3 c = uInner > .5 ? mix(vec3(1.,.78,.45), vec3(1.,.97,.9), t) : mix(vec3(1.,.36,.1), vec3(1.,.66,.32), t);
+        c = mix(c, vec3(.35,1.,.45), uGreen);                                // (green ignition flash: unused on Concorde)
+        gl_FragColor = vec4(c, clamp(body * edge * lip * flick * uI * (uInner > .5 ? .8 : .6), 0., 1.)); }`,
   });
 }
 const diamondTex = radialTexture([[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,190,120,.6)'], [1, 'rgba(255,120,40,0)']]);
-const flames = [], diamonds = [];
+const glowTex = radialTexture([[0, 'rgba(255,236,200,1)'], [0.3, 'rgba(255,160,80,.45)'], [1, 'rgba(255,110,40,0)']]);
+const flames = [], diamonds = [], glows = [];
 const flameLight = new THREE.PointLight(0xff7a30, 0, 30, 1.6);
 jet.add(flameLight);
 function buildFlames() {
@@ -278,12 +288,15 @@ function buildFlames() {
     g.position.copy(raw(p));
     g.rotation.x = -Math.PI / 2;                          // cones are built along +Y; point them backwards (-Z)
     const outer = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R, FLAME_LEN, 32, 1, true), flameMat(false));
-    const inner = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R * 0.5, FLAME_LEN, 24, 1, true), flameMat(true));
-    for (const m of [outer, inner]) { m.position.y = FLAME_LEN / 2; g.add(m); }   // wide base at the nozzle, tip trailing behind
+    const inner = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R * 0.55, FLAME_LEN * 0.75, 24, 1, true), flameMat(true));
+    outer.position.y = FLAME_LEN / 2; inner.position.y = FLAME_LEN * 0.375;  // wide base at the nozzle, tip trailing behind
+    g.add(outer, inner);
     for (let i = 0; i < 4; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, depthWrite: false, transparent: true, opacity: 0, fog: false }));
-      s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.14 - i * 0.018); g.add(s); diamonds.push(s);
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
+      s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.12 - i * 0.016); g.add(s); diamonds.push(s);
     }
+    const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
+    glow.position.y = 0.06; glow.scale.setScalar(0.42); g.add(glow); glows.push(glow);
     jet.add(g); flames.push(g);
   }
   flameLight.position.copy(raw([0, 0.6, 17]));
@@ -452,10 +465,10 @@ const KEYS = {
   // the aircraft shrinks into the distance and is gone...
   gone:     { between: ['outro', 'finaleIn', 0.45], jz: 420, jy: 8, vis: 0 },
   // ...is quietly moved off the left edge of the next shot...
-  repo:     { between: ['outro', 'finaleIn', 0.85], look: [0, -0.55, 0], cam: [-25, 13.8, -1.35], fov: 30, jz: -70, jy: 0, roll: 0.35, pitch: -0.08, flame: 0, speed: 0.4, lift: 0, pz: 1.75, vis: 0 },
+  repo:     { between: ['outro', 'finaleIn', 0.85], look: [0, -0.55, 0], cam: [-17, 9.4, -0.92], fov: 30, jz: -70, jy: 0, roll: 0.35, pitch: -0.08, flame: 1, speed: 0.4, lift: 0, pz: 1.75, vis: 0 },
   // ...and once the closing poster has scrolled into place, flies in from the left into the gap in the type
   finaleIn: { at: ['finale', 0], vis: 1 },
-  finale:   { at: ['finale', 0.45, 1], jz: 0, speed: 0.25 },  // (repo sets pz for phones)
+  finale:   { at: ['finale', 0.45, 1], jz: 0, speed: 0.25, bloom: 0.3 },  // (repo sets pz for phones)
 };
 const FIELDS = Object.keys(DEFAULT).filter(f => f !== 'cam' && f !== 'look');
 const JET_FIELDS = new Set(['jz', 'jy', 'pitch', 'roll', 'yaw']);
@@ -657,8 +670,9 @@ function frame(now) {
 
   // engines and heat
   flameU.uI.value = s.flame; flameU.uT.value = t; flameU.uGreen.value = s.green;
-  for (const f of flames) f.scale.set(1, 0.55 + 0.6 * s.flame + Math.sin(t * 30) * 0.03, 1);
-  diamonds.forEach((d, i) => { d.material.opacity = clamp01(s.flame * 1.4 - 0.4) * (0.7 + 0.3 * Math.sin(t * 50 + i)); });
+  for (const f of flames) { f.visible = s.flame > 0.01; f.scale.set(1, 0.55 + 0.6 * s.flame + Math.sin(t * 30) * 0.03, 1); }
+  diamonds.forEach((d, i) => { d.material.opacity = clamp01(s.flame * 1.4 - 0.4) * (0.3 + 0.15 * Math.sin(t * 50 + i)); });
+  glows.forEach((g, i) => { g.material.opacity = s.flame * (0.75 + 0.15 * Math.sin(t * 37 + i * 2)); });
   flameLight.intensity = s.flame * 6;
   heatU.uHeat.value = s.heat;
 

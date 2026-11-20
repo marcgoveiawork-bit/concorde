@@ -23,7 +23,17 @@ const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.json': 'applic
     if (!file || !fs.existsSync(file)) { console.log('missing', route.request().url()); return route.fulfill({ status: 404, body: '' }); }
     route.fulfill({ status: 200, body: fs.readFileSync(file), contentType: 'text/javascript' });
   });
-  await p.route(/fonts\.(googleapis|gstatic)\.com/, route => route.fulfill({ status: 200, body: '', contentType: 'text/css' }));
+  // Google Fonts: blank by default (fallback fonts); FONTS=1 fetches the real ones through curl (it uses the
+  // container's proxy settings, which the browser doesn't), so layouts match the live site.
+  const { execFileSync } = require('child_process');
+  await p.route(/fonts\.(googleapis|gstatic)\.com/, route => {
+    if (!process.env.FONTS) return route.fulfill({ status: 200, body: '', contentType: 'text/css' });
+    const url = route.request().url();
+    try {
+      const body = execFileSync('curl', ['-s', '--fail', '-A', 'Mozilla/5.0 Chrome/120', url], { maxBuffer: 1 << 26 });
+      route.fulfill({ status: 200, body, contentType: url.includes('googleapis') ? 'text/css' : 'font/woff2' });
+    } catch { route.fulfill({ status: 404, body: '' }); }
+  });
   await p.goto('http://local.test/' + page);
   await p.waitForFunction(() => window.ready, null, { timeout: +(process.env.TIMEOUT || 240000) });
   for (const [n, expr] of JSON.parse(viewsJson)) {
