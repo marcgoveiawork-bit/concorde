@@ -36,9 +36,11 @@ Then open http://localhost:8000.
 
 ## What's new compared with the SR-71 template (`main.js`)
 
-- **Droop nose and visor**: the skin ahead of the hinge is bent on the vertices (`prepareDroop` / `updateNose`), so the
-  nose drops 5° for taxi, 12.5° at its tour stop and rises flush in flight; the visor and its glass slide down into it.
-  Key fields: `droop` (degrees), `visor` (1 = lowered).
+- **Droop nose**: the skin ahead of the hinge is bent on the vertices (`prepareDroop` / `updateNose`), so the
+  nose drops 5° for taxi, 12.5° at its tour stop and rises flush in flight. Key field: `droop` (degrees).
+  The visor stays up (`visor: 0`): the model has no windscreen surround or flight deck to show with it down. The
+  lowering code (with a painted fairing that closes the opening) is still there if a better model comes along.
+  A dark shell (`cockpit_interior`) fills the empty flight deck so nothing shows through the windscreen.
 - **Gear doors**: the model has open and closed gear doors, swapped once the legs are stowed, so the camera may look
   at the underside (the SR-71's "camera stays above the jet" rule is gone). Gear legs are split out of merged meshes
   by position (`splitMesh`, `legOf`).

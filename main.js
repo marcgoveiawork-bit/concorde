@@ -339,7 +339,8 @@ const visorFairing = new THREE.Group();                                 // fills
 const VISOR_DROP = [0, -0.75, -0.12];                                  // raw units: down into the nose and slightly forward
 // The visor is the skin over that part of the nose (the model has nothing under it). When it is down, a low painted
 // fairing in its shape (visorFairing) closes the opening, as the real nose top does; the visor slides down into it
-// and is hidden once fully stowed.
+// and is hidden once fully stowed. In practice the keys keep the visor up (visor: 0) and only droop the nose: the
+// model has no windscreen surround or flight deck to show with the visor down, and its own glazed visor looks right.
 const VISOR_BASE_Y = 2.41, FAIRING_SQUASH = 0.32;                      // raw: bottom of the visor, fairing height factor
 function prepareDroop(mesh) {
   const geo = mesh.geometry, M = mesh.matrixWorld.clone(), Minv = M.clone().invert(), N = new THREE.Matrix3().getNormalMatrix(M);
@@ -434,7 +435,7 @@ const DEFAULT = {
   cam: [8, 2, 10], look: [0, 0, 0], fov: 32,     // camera position, what it looks at, lens
   yaw: 0, pitch: 0, roll: 0, jy: 0, jz: 0,      // jet attitude and position (pitch < 0 = nose up)
   floor: 1, gear: 1, speed: 0,                  // studio floor, landing gear (1 = down), speed streaks
-  droop: 5, visor: 1,                           // nose droop in degrees (0, 5 or 12.5), visor (1 = lowered)
+  droop: 5, visor: 0,                           // nose droop in degrees (0, 5 or 12.5), visor (1 = lowered: kept at 0, see VISOR_DROP)
   sky: 0,                                       // backdrop: 0 = white studio, 1 = altitude blue (text turns white past 0.45)
   poster: 0, bp: 0, bpY: 0,                     // opening poster type, blueprint backdrop (+ how far it has scrolled away)
   vis: 1,                                       // 0 hides the jet (used while it is repositioned off screen)
@@ -468,7 +469,7 @@ const KEYS = {
   liftoff:  { at: ['cost', 0.4], look: [0, 1.1, 0.3], cam: [21, 0.3, 4.3], fov: 33, shift: -0.36, pz: 1.4, jy: 1.1, pitch: -0.12, gear: 0.5, floor: 0.3, speed: 0.5, shake: 0.6, key: 1.6, env: 1.2, sky: 0.1 },
   takeoff:  { at: ['cost', 0.85, 1], look: [0, 2.2, 2], cam: [-6, 5.5, -14], fov: 40, pz: 1, floor: 0, gear: 0, speed: 1, flame: 1, jy: 2.2, pitch: -0.14, env: 0.9, key: 1.4, rim: 2.5, bloom: 0.2, shake: 1, sky: 0.35, shift: -0.15 },
   // climbing out the nose comes up and the visor closes; reheat stays lit through the sound barrier
-  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, droop: 0, visor: 0, flame: 0.6, env: 0.8, key: 1.6, bloom: 0.25, shake: 0.4, sky: 0.8, shift: -0.12 },
+  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, droop: 0, flame: 0.6, env: 0.8, key: 1.6, bloom: 0.25, shake: 0.4, sky: 0.8, shift: -0.12 },
   // cruise: reheat off (Concorde cruised at Mach 2 without it), streaks rushing past
   cruise:   { look: [0, 2.2, 0.5], cam: [22, 6, 6], fov: 30, speed: 1.4, flame: 0, pitch: 0, roll: 0, env: 0.8, key: 1.8, rim: 3, bloom: 0.25, shake: 0.15, sky: 1, shift: 0.3 },
   records:  { look: [0, 2.2, 0], cam: [-9, 22, -20], fov: 34, speed: 0.8, roll: -0.08, shift: 0.42 },
@@ -742,11 +743,12 @@ async function onModel(gltf) {
   const airframe = [];
   root.traverse(o => { if (o.isMesh && !isGear(o) && !visorMeshes.includes(o)) airframe.push(o); });
   airframe.forEach(prepareDroop);
-  // The model has no cockpit interior: with the visor down you would see through the windscreen and the hollow
-  // nose to the floor. A dark shell inside the flight deck (raw units, behind the hinge, inside the skin even
-  // with the nose fully drooped) stands in for the interior.
-  const cabin = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0x3b4350, side: THREE.DoubleSide }));
-  cabin.position.set(0, 1.95, -24.5); cabin.scale.set(0.95, 0.8, 2.4);
+  // The model is a hollow shell with no flight deck: looking in through the windscreen you would see out through the
+  // far side of the fuselage (the floor, the gear). A dark shell fills the flight deck instead, sized from the
+  // measured fuselage profile (top 3.21 at z -24.5, 3.37 at -23.5) so it reaches up under the roof but stays inside
+  // the skin, behind the nose hinge. (Drawing the airframe's inside faces dark was tried: it exposes flipped faces.)
+  const cabin = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 20), new THREE.MeshBasicMaterial({ color: 0x1d2229, side: THREE.DoubleSide }));
+  cabin.position.set(0, 2.2, -23.5); cabin.scale.set(0.8, 0.95, 2.6);
   cabin.name = 'cockpit_interior'; root.add(cabin);
   buildGear(root);
 
@@ -770,9 +772,10 @@ async function onModel(gltf) {
     if (m.name === 'Glass') { o.material = glass; continue; }
     if (!made.has(m)) {
       const metal = /Engines|gear|wheel/.test(m.name);
-      made.set(m, new THREE.MeshPhysicalMaterial({
+      const mat = new THREE.MeshPhysicalMaterial({
         map: m.map, color: m.color, roughness: metal ? 0.45 : 0.38, metalness: metal ? 0.55 : 0.05, clearcoat: metal ? 0.2 : 0.6, clearcoatRoughness: 0.2,
-      }));
+      });
+      made.set(m, mat);
     }
     o.material = made.get(m);
   }
