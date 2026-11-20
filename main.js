@@ -1,4 +1,5 @@
-// Concorde: scroll-driven 3D story, all in a deep-blue photo studio. Built from the SR-71 Blackbird template.
+// Concorde: scroll-driven 3D story, from a white studio with a red runway up into the blue (travel-poster look).
+// Built from the SR-71 Blackbird template.
 // How it works:
 //   1. SCENE   three.js stage: the jet, black studio, floor with real shadows, poster type, blueprint
 //              backdrop, reheat flames, speed streaks.
@@ -26,7 +27,7 @@ const canvas = document.getElementById('stage');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
 renderer.setSize(innerWidth, innerHeight);
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMapping = THREE.NeutralToneMapping;          // keeps the white studio and white paint white
 renderer.shadowMap.enabled = true;               // the jet casts a real shadow on the studio floor and poster type
 renderer.shadowMap.type = THREE.PCFShadowMap;
 canvas.addEventListener('webglcontextlost', e => {
@@ -38,10 +39,12 @@ canvas.addEventListener('webglcontextlost', e => {
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(32, innerWidth / innerHeight, 0.05, 3000);
 
-// Reflections: a tiny black "photo studio" with softbox strips, baked into an environment map.
+// Reflections: a light grey-blue "photo studio" with softbox strips, baked into an environment map.
 function studioEnvironment() {
   const env = new THREE.Scene();
-  env.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), new THREE.MeshBasicMaterial({ color: 0x060f1e, side: THREE.BackSide })));
+  env.add(new THREE.Mesh(new THREE.SphereGeometry(50, 32, 16), new THREE.MeshBasicMaterial({ color: 0x5d6b80, side: THREE.BackSide })));
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(48, 32), new THREE.MeshBasicMaterial({ color: 0xb9b4ac }));
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -8; env.add(ground);   // a bright floor to light the undersides
   const strip = (w, h, pos, bright, tint = 0xffffff) => {
     const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color: new THREE.Color(tint).multiplyScalar(bright), side: THREE.DoubleSide }));
     m.position.set(...pos); m.lookAt(0, 0, 0); env.add(m);
@@ -64,9 +67,27 @@ const rimA = new THREE.DirectionalLight(0x9fc7ff, 3);       rimA.position.set(-6
 const rimB = new THREE.DirectionalLight(0xc8dcff, 2);       rimB.position.set(7, 1.5, -7);
 scene.add(keyLight, rimA, rimB);
 
-// Studio backdrop: deep high-altitude blue (matches --bg in index.html).
-const STUDIO = 0x08162b;
-scene.background = new THREE.Color(STUDIO);
+// Backdrop: a vertical gradient drawn on a small canvas, from the white studio (sky 0, matches --bg in index.html)
+// to altitude blue (sky 1), lighter toward the horizon like the haze at the bottom of a travel poster.
+// The blue vignette at the screen edges is CSS (#veil). main.js toggles html.sky so the text turns white in the blue.
+const SKY_STOPS = [[0, '#e4e8ee', '#7ba3da', '#0c2a66'], [0.55, '#efede8', '#a8c4e8', '#2b5899'], [1, '#f3f1ec', '#d9e5f2', '#9fb9da']]; // [pos, studio, light sky, altitude]
+const bgCanvas = document.createElement('canvas'); bgCanvas.width = 4; bgCanvas.height = 256;
+const bgTex = new THREE.CanvasTexture(bgCanvas); bgTex.colorSpace = THREE.SRGBColorSpace;
+scene.background = bgTex;
+let skyShown = -1;
+const ca = new THREE.Color(), cb = new THREE.Color();
+function updateSky(k) {
+  if (Math.abs(k - skyShown) < 0.004) return;
+  skyShown = k;
+  const g = bgCanvas.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+  // white -> bright sky blue -> deep blue, so the blend never passes through a dull grey
+  for (const [p, a, m, b] of SKY_STOPS) {
+    if (k < 0.5) ca.set(a).lerp(cb.set(m), k * 2); else ca.set(m).lerp(cb.set(b), k * 2 - 1);
+    gr.addColorStop(p, '#' + ca.getHexString());
+  }
+  g.fillStyle = gr; g.fillRect(0, 0, 4, 256); bgTex.needsUpdate = true;
+  document.documentElement.classList.toggle('sky', k > 0.45);
+}
 scene.add(camera);                                   // so things can be pinned to the screen (the blueprint)
 
 function radialTexture(stops) {
@@ -77,19 +98,41 @@ function radialTexture(stops) {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 
-// Hangar floor + soft contact shadow.
-const floor = new THREE.Mesh(new THREE.CircleGeometry(30, 64), new THREE.MeshLambertMaterial({
-  color: STUDIO, transparent: true, alphaMap: radialTexture([[0, '#fff'], [0.55, '#fff'], [1, '#000']]),
-}));
+// Studio floor: shadows only, drawn over the backdrop, so the floor never shows an edge. Plus a soft contact shadow.
+const FLOOR_SHADOW = 0.3;
+const floor = new THREE.Mesh(new THREE.CircleGeometry(30, 64), new THREE.ShadowMaterial({ color: 0x0e2348, opacity: FLOOR_SHADOW, transparent: true }));
 floor.rotation.x = -Math.PI / 2;
 floor.receiveShadow = true;
 const shadow = new THREE.Mesh(new THREE.PlaneGeometry(7, 12), new THREE.MeshBasicMaterial({
   map: radialTexture([[0, 'rgba(0,0,0,.85)'], [1, 'rgba(0,0,0,0)']]), transparent: true, depthWrite: false,
 }));
 shadow.rotation.x = -Math.PI / 2;
+shadow.renderOrder = 3;
 scene.add(floor, shadow);
 
-// Speed streaks: thin lines rushing past in flight, the only cue of speed in the black studio.
+// The red runway: a long strip down the studio floor with thin white edge lines, fading out at both ends.
+// The aircraft taxis up it in the opening, and takes off from it.
+const RUNWAY_W = 3.1, RUNWAY_L = 70;
+function runwayTextures() {
+  const c = document.createElement('canvas'); c.width = 256; c.height = 4;
+  const g = c.getContext('2d');
+  g.fillStyle = '#b8101c'; g.fillRect(0, 0, 256, 4);
+  g.fillStyle = '#f3f1ec'; g.fillRect(9, 0, 4, 4); g.fillRect(243, 0, 4, 4);       // edge lines
+  const map = new THREE.CanvasTexture(c); map.colorSpace = THREE.SRGBColorSpace;
+  const a = document.createElement('canvas'); a.width = 4; a.height = 256;
+  const ag = a.getContext('2d'), gr = ag.createLinearGradient(0, 0, 0, 256);
+  gr.addColorStop(0, '#000'); gr.addColorStop(0.18, '#fff'); gr.addColorStop(0.82, '#fff'); gr.addColorStop(1, '#000');
+  ag.fillStyle = gr; ag.fillRect(0, 0, 4, 256);
+  return { map, alphaMap: new THREE.CanvasTexture(a) };
+}
+const runway = new THREE.Mesh(new THREE.PlaneGeometry(RUNWAY_W, RUNWAY_L),
+  new THREE.MeshLambertMaterial({ ...runwayTextures(), transparent: true, depthWrite: false, emissive: 0x8a0a14, emissiveIntensity: 0.35 }));
+runway.renderOrder = 1;                                          // floor layers draw in order: runway, poster type, contact shadow
+runway.rotation.x = -Math.PI / 2;
+runway.receiveShadow = true;
+scene.add(runway);
+
+// Speed streaks: thin lines rushing past in flight, the cue of speed once the aircraft is up in the blue.
 // They live in a field around the camera and fade out with distance, so the field never shows an edge.
 const STREAKS = 220, FIELD = 60;
 const streaks = new THREE.InstancedMesh(new THREE.BoxGeometry(0.018, 0.018, 1),
@@ -116,45 +159,54 @@ function updateStreaks(dt, speed) {
   streaks.instanceMatrix.needsUpdate = true; streaks.instanceColor.needsUpdate = true;
 }
 
-// Opening poster: big type printed on the studio floor. The jet taxis onto it and shadows it.
+// Opening poster: thin, widely spaced type printed on the studio floor, across the red runway. Red on the white
+// floor, white where it crosses the runway. The aircraft taxis up the runway onto it and shadows it.
 const POSTER_H = 13.4, POSTER_W = POSTER_H * 0.715;                 // world units (the jet is 10 long)
-const posterMat = new THREE.MeshLambertMaterial({ transparent: true, emissive: 0xffffff, emissiveIntensity: 0.32 });
+const posterMat = new THREE.MeshLambertMaterial({ transparent: true, depthWrite: false, emissive: 0xffffff, emissiveIntensity: 0.3 });
 const poster = new THREE.Mesh(new THREE.PlaneGeometry(POSTER_W, POSTER_H), posterMat);
 poster.rotation.set(-Math.PI / 2, 0, Math.PI);                      // lie flat, readable from above with the nose pointing up-screen
 poster.receiveShadow = true;
+poster.renderOrder = 2;
 scene.add(poster);
 async function drawPoster() {
-  try { await document.fonts.load('400 200px Anton'); } catch {}
+  try { await Promise.all([document.fonts.load('200 100px Jost'), document.fonts.load('400 100px Jost')]); } catch {}
   const W = 1430, H = 2000, c = document.createElement('canvas'); c.width = W; c.height = H;
   const g = c.getContext('2d');
-  // transparent background: only the type is printed, so the sheet has no visible edge on the studio floor
-  const FONT = px => `400 ${px}px Anton, Impact, "Arial Narrow", sans-serif`;
-  // draw `text` filling `width`, its capitals spanning top..bottom (squashed or stretched vertically to fit)
-  const big = (text, top, bottom, width) => {
-    g.font = FONT(200); const m = g.measureText(text);
-    const capH = m.actualBoundingBoxAscent, sx = width / m.width, sy = (bottom - top) / capH;
-    g.save(); g.translate(W / 2, bottom); g.scale(sx, sy); g.textAlign = 'center'; g.textBaseline = 'alphabetic';
-    g.fillStyle = '#ffffff'; g.fillText(text, 0, 0); g.restore();
+  const px = W / POSTER_W, rw = RUNWAY_W * px, rx0 = (W - rw) / 2, rx1 = rx0 + rw;
+  const FONT = (weight, size) => `${weight} ${size}px Jost, "Century Gothic", Futura, sans-serif`;
+  // `text` with its letters spread evenly so it spans `width`, centred on cx, baseline at y
+  const tracked = (text, cx, y, size, weight, width) => {
+    g.font = FONT(weight, size);
+    const ws = [...text].map(ch => g.measureText(ch).width), gap = (width - ws.reduce((a, b) => a + b, 0)) / (text.length - 1);
+    let x = cx - width / 2;
+    [...text].forEach((ch, i) => { g.fillText(ch, x, y); x += ws[i] + gap; });
   };
-  big('CONCORDE', H * 0.08, H * 0.44, W * 0.84);
-  big('MACH 2', H * 0.70, H * 0.91, W * 0.84);
-  // label bars across the middle, with the spec underneath
-  const by = H * 0.535, bh = H * 0.05;
-  g.fillStyle = '#ffffff'; g.fillRect(W * 0.08, by, W * 0.84, bh);
-  g.fillStyle = '#08162b'; g.font = FONT(bh * 0.78); g.textBaseline = 'middle';
-  g.textAlign = 'left'; g.fillText('ENGINES', W * 0.1, by + bh / 2);
-  g.textAlign = 'right'; g.fillText('SPEED', W * 0.9, by + bh / 2);
-  g.fillStyle = '#ffffff'; g.font = FONT(H * 0.034); g.textBaseline = 'top';
-  g.textAlign = 'left'; g.fillText('OLYMPUS 593', W * 0.08, by + bh + H * 0.02);
-  g.textAlign = 'right'; g.fillText('MACH 2.04', W * 0.92, by + bh + H * 0.02);
+  const label = (title, value, cx) => {                              // small spec block on the white floor beside the runway
+    const w = (rx0 - 0) * 0.72;
+    tracked(title, cx, H * 0.335, 40, 400, w);
+    g.fillRect(cx - w / 2, H * 0.352, w, 3);
+    tracked(value, cx, H * 0.405, 62, 200, w);
+  };
+  const paint = () => {
+    tracked('CONCORDE', W / 2, H * 0.17, 230, 200, W * 0.94);
+    label('ENGINES', 'OLYMPUS 593', rx0 / 2);
+    label('SPEED', 'MACH 2.04', (rx1 + W) / 2);
+    tracked('MACH 2', W / 2, H * 0.95, 230, 200, W * 0.66);
+  };
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  for (const [color, onRunway] of [['#c8102e', false], ['#f3f1ec', true]]) {
+    g.save(); g.beginPath();
+    if (onRunway) g.rect(rx0, 0, rw, H); else { g.rect(0, 0, rx0, H); g.rect(rx1, 0, W - rx1, H); }
+    g.clip(); g.fillStyle = color; paint(); g.restore();
+  }
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 8;
   posterMat.map = posterMat.emissiveMap = t; posterMat.needsUpdate = true;
 }
 
-// Blueprint scene: white linework drawn from the model itself (tools/blueprint.html) on a screen pinned to the camera,
+// Blueprint scene: linework drawn from the model itself (tools/blueprint.html), tinted navy on the white studio, on a screen pinned to the camera,
 // sized so the whole sheet fits the window. state.bpY slides it up and out of view.
 const BP_ASPECT = 2400 / 1560, BP_DIST = 40;                        // far behind the jet
-const bpMat = new THREE.MeshBasicMaterial({ color: 0xd8e6ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
+const bpMat = new THREE.MeshBasicMaterial({ color: 0x1b3a72, transparent: true, opacity: 0, depthWrite: false, toneMapped: false });
 const blueprint = new THREE.Mesh(new THREE.PlaneGeometry(BP_ASPECT, 1), bpMat);
 blueprint.renderOrder = -1;
 camera.add(blueprint);
@@ -201,7 +253,7 @@ const FLAME_LEN = 1.7, FLAME_R = 0.1;
 const flameU = { uI: { value: 0 }, uT: { value: 0 }, uGreen: { value: 0 } };
 function flameMat(inner) {
   return new THREE.ShaderMaterial({
-    uniforms: { ...flameU, uInner: { value: inner ? 1 : 0 } }, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, fog: false,
+    uniforms: { ...flameU, uInner: { value: inner ? 1 : 0 } }, transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: false,
     vertexShader: `varying float vT; uniform float uT;
       void main(){ vT = .5 - position.y / ${FLAME_LEN.toFixed(2)}; vec3 p = position; p.xz *= 1. + .06 * sin(uT * 40. + position.y * 6.);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.); }`,
@@ -209,7 +261,7 @@ function flameMat(inner) {
       void main(){ float a = pow(clamp(vT,0.,1.), uInner > .5 ? 2.5 : 1.4) * uI;
         vec3 c = mix(mix(vec3(1.,.32,.08), vec3(1.,.62,.3), vT), vec3(.75,.85,1.), uInner);
         c = mix(c, vec3(.35,1.,.45), uGreen);                        // (green ignition flash: unused on Concorde)
-        gl_FragColor = vec4(c * a * (uInner > .5 ? 1.15 : .6) * (.9 + .1 * sin(uT * 60.)), 1.); }`,
+        gl_FragColor = vec4(c * (uInner > .5 ? 1.15 : 1.), clamp(a * (uInner > .5 ? .9 : .75) * (.9 + .1 * sin(uT * 60.)), 0., 1.)); }`,   // normal blending: visible on white too
   });
 }
 const diamondTex = radialTexture([[0, 'rgba(255,255,255,1)'], [0.25, 'rgba(255,190,120,.6)'], [1, 'rgba(255,120,40,0)']]);
@@ -225,7 +277,7 @@ function buildFlames() {
     const inner = new THREE.Mesh(new THREE.ConeGeometry(FLAME_R * 0.5, FLAME_LEN, 24, 1, true), flameMat(true));
     for (const m of [outer, inner]) { m.position.y = FLAME_LEN / 2; g.add(m); }   // wide base at the nozzle, tip trailing behind
     for (let i = 0; i < 4; i++) {
-      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, opacity: 0, fog: false }));
+      const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: diamondTex, depthWrite: false, transparent: true, opacity: 0, fog: false }));
       s.position.y = 0.22 + i * 0.25; s.scale.setScalar(0.14 - i * 0.018); g.add(s); diamonds.push(s);
     }
     jet.add(g); flames.push(g);
@@ -355,9 +407,10 @@ const DEFAULT = {
   yaw: 0, pitch: 0, roll: 0, jy: 0, jz: 0,      // jet attitude and position (pitch < 0 = nose up)
   floor: 1, gear: 1, speed: 0,                  // studio floor, landing gear (1 = down), speed streaks
   droop: 5, visor: 1,                           // nose droop in degrees (0, 5 or 12.5), visor (1 = lowered)
+  sky: 0,                                       // backdrop: 0 = white studio, 1 = altitude blue (text turns white past 0.45)
   poster: 0, bp: 0, bpY: 0,                     // opening poster type, blueprint backdrop (+ how far it has scrolled away)
   vis: 1,                                       // 0 hides the jet (used while it is repositioned off screen)
-  env: 1, key: 2, rim: 2, exposure: 1, bloom: 0.25,
+  env: 1, key: 2, rim: 2, exposure: 1, bloom: 0,
   flame: 0, green: 0, heat: 0, shake: 0,
   shift: 0,                                     // slide the jet sideways in frame, away from the text (-1..1)
   lift: 1,                                      // on phones, lift the picture above the text (0 = keep centred)
@@ -367,9 +420,9 @@ const DEFAULT = {
 // `look` may name an anchor; `cam` is then an offset from that anchor.
 // The model has gear doors, so the camera may look at the underside once the gear is up.
 const KEYS = {
-  poster:   { cam: [0, 25, -0.3], look: [0, 0, 0], fov: 32, jz: -19, poster: 1, env: 0.5, key: 3.2, rim: 1.2, bloom: 0, lift: 0, low: 1 },
+  poster:   { cam: [0, 33, -0.3], look: [0, 0, 0], fov: 32, jz: -19, poster: 1, env: 0.8, key: 2.6, rim: 1, bloom: 0, lift: 0, low: 1 },
   arrive:   { jz: 0, shift: 0.34 },
-  airframe: { cam: [-11.5, 4, -8], look: [0, -0.2, 0], fov: 32, poster: 0, low: 0, env: 1, key: 2.2, rim: 2, bloom: 0.25, shift: -0.2, lift: 1 },
+  airframe: { cam: [-11.5, 4, -8], look: [0, -0.2, 0], fov: 32, poster: 0, low: 0, env: 1, key: 2.2, rim: 2, shift: -0.2, lift: 1 },
   // blueprint: the text pins (see .pin in the HTML) while the sheet is shown whole, then slides up and away
   blueprint:{ at: ['blueprint', 0, 0.3], cam: [0, 0.75, 10], look: [0, 0.15, 0], fov: 32, bp: 1, bpY: 0, floor: 0, env: 1.1, key: 2, rim: 2.4, shift: 0.2 },
   bpout:    { at: ['blueprint', 0.85, 1], bpY: 1 },
@@ -381,17 +434,17 @@ const KEYS = {
   tail:     { look: 'tail', cam: [6.5, 2.4, -5], shift: -0.22 },
   // takeoff chapter is pinned: the four engines light up in reheat under "Four engines in reheat", and the
   // jet rolls and lifts off while the next chapter's text (cost) takes over.
-  ignite:   { at: ['takeoff', 0, 1.4], look: [0, 0, -2], cam: [-4.5, 1.4, -12], fov: 38, pz: 1, flame: 0.8, bloom: 0.8, env: 0.9, key: 1, shift: 0.15 },
+  ignite:   { at: ['takeoff', 0, 1.4], look: [0, 0, -2], cam: [-4.5, 1.4, -12], fov: 38, pz: 1, flame: 0.8, bloom: 0.15, env: 0.9, key: 1.4, shift: 0.15 },
   spool:    { at: ['cost', -0.25], flame: 1 },
   // low side view while the gear comes up and the doors close
-  liftoff:  { at: ['cost', 0.4], look: [0, 1.1, 0.3], cam: [21, 0.3, 4.3], fov: 33, shift: -0.36, pz: 1.4, jy: 1.1, pitch: -0.12, gear: 0.5, floor: 0.3, speed: 0.5, shake: 0.6, key: 1.6, env: 1.2 },
-  takeoff:  { at: ['cost', 0.85, 1], look: [0, 2.2, 2], cam: [-6, 5.5, -14], fov: 40, pz: 1, floor: 0, gear: 0, speed: 1, flame: 1, jy: 2.2, pitch: -0.14, env: 0.9, key: 1.2, rim: 2.5, bloom: 0.8, shake: 1, shift: -0.15 },
+  liftoff:  { at: ['cost', 0.4], look: [0, 1.1, 0.3], cam: [21, 0.3, 4.3], fov: 33, shift: -0.36, pz: 1.4, jy: 1.1, pitch: -0.12, gear: 0.5, floor: 0.3, speed: 0.5, shake: 0.6, key: 1.6, env: 1.2, sky: 0.1 },
+  takeoff:  { at: ['cost', 0.85, 1], look: [0, 2.2, 2], cam: [-6, 5.5, -14], fov: 40, pz: 1, floor: 0, gear: 0, speed: 1, flame: 1, jy: 2.2, pitch: -0.14, env: 0.9, key: 1.4, rim: 2.5, bloom: 0.2, shake: 1, sky: 0.35, shift: -0.15 },
   // climbing out the nose comes up and the visor closes; reheat stays lit through the sound barrier
-  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, droop: 0, visor: 0, flame: 0.6, env: 0.8, key: 1.4, bloom: 0.6, shake: 0.4, shift: -0.12 },
+  climb:    { look: [0, 2.6, 1], cam: [11, 8, -12], fov: 36, pitch: -0.3, roll: 0.15, droop: 0, visor: 0, flame: 0.6, env: 0.8, key: 1.6, bloom: 0.25, shake: 0.4, sky: 0.8, shift: -0.12 },
   // cruise: reheat off (Concorde cruised at Mach 2 without it), streaks rushing past
-  cruise:   { look: [0, 2.2, 0.5], cam: [22, 6, 6], fov: 30, speed: 1.4, flame: 0, pitch: 0, roll: 0, env: 0.8, key: 1.6, rim: 3, bloom: 0.3, shake: 0.15, shift: 0.3 },
+  cruise:   { look: [0, 2.2, 0.5], cam: [22, 6, 6], fov: 30, speed: 1.4, flame: 0, pitch: 0, roll: 0, env: 0.8, key: 1.8, rim: 3, bloom: 0.25, shake: 0.15, sky: 1, shift: 0.3 },
   records:  { look: [0, 2.2, 0], cam: [-9, 22, -20], fov: 34, speed: 0.8, roll: -0.08, shift: 0.42 },
-  outro:    { look: [0, 3, 30], cam: [3, 10, -46], fov: 30, speed: 1, jz: 130, jy: 4, roll: 0, pitch: -0.05, bloom: 0.4, shift: 0 },
+  outro:    { look: [0, 3, 30], cam: [3, 10, -46], fov: 30, speed: 1, jz: 130, jy: 4, roll: 0, pitch: -0.05, bloom: 0.25, shift: 0 },
   // the aircraft shrinks into the distance and is gone...
   gone:     { between: ['outro', 'finaleIn', 0.45], jz: 420, jy: 8, vis: 0 },
   // ...is quietly moved off the left edge of the next shot...
@@ -581,12 +634,13 @@ function frame(now) {
   camera.updateProjectionMatrix();
 
   // studio
-  floor.material.opacity = s.floor; shadow.material.opacity = s.floor * 0.5;
-  floor.visible = shadow.visible = s.floor > 0.01;
-  floor.position.y = floorY; shadow.position.y = floorY + 0.01;
+  floor.material.opacity = s.floor * FLOOR_SHADOW; shadow.material.opacity = s.floor * 0.35; runway.material.opacity = s.floor;
+  floor.visible = shadow.visible = runway.visible = s.floor > 0.01;
+  floor.position.y = floorY; shadow.position.y = floorY + 0.012; runway.position.y = floorY + 0.004;
   renderer.shadowMap.autoUpdate = floor.visible;                       // no floor, no shadow pass
-  posterMat.opacity = s.poster; poster.visible = s.poster > 0.01; poster.position.y = floorY + 0.004;
-  bpMat.opacity = s.bp * 0.5; blueprint.visible = s.bp > 0.01;
+  posterMat.opacity = s.poster; poster.visible = s.poster > 0.01; poster.position.y = floorY + 0.008;
+  bpMat.opacity = s.bp * 0.8; blueprint.visible = s.bp > 0.01;
+  updateSky(s.sky);
   if (blueprint.visible) placeBlueprint(s, W, H);
   updateStreaks(dt, s.speed);
 
@@ -698,7 +752,7 @@ async function onModel(gltf) {
 // Compile every shader and upload every texture before the page appears, with everything that can ever be
 // shown switched on, so nothing has to get ready (and blink) in the middle of a scroll.
 async function warmUp() {
-  const show = [poster, blueprint, streaks, floor, shadow, jet, ...flames];
+  const show = [poster, blueprint, streaks, floor, shadow, runway, jet, ...flames];
   const was = show.map(o => o.visible);
   show.forEach(o => { o.visible = true; });
   legs.forEach(l => { l.pivot.visible = true; });
