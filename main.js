@@ -335,7 +335,12 @@ function splitMesh(mesh, classify) {
 const NOSE_HINGE = [0, 1.0, -26.6], NOSE_BLEND = 0.7;
 const droopers = [];                                                   // { geo, idx, rawP, rawN, M, Minv }
 let visorParts = [], droopShown = -1, visorShown = -1;
-const VISOR_DROP = [0, -0.7, -0.2];                                    // raw units: down and slightly forward
+const visorFairing = new THREE.Group();                                 // fills the opening when the visor is down (built at load)
+const VISOR_DROP = [0, -0.75, -0.12];                                  // raw units: down into the nose and slightly forward
+// The visor is the skin over that part of the nose (the model has nothing under it). When it is down, a low painted
+// fairing in its shape (visorFairing) closes the opening, as the real nose top does; the visor slides down into it
+// and is hidden once fully stowed.
+const VISOR_BASE_Y = 2.41, FAIRING_SQUASH = 0.32;                      // raw: bottom of the visor, fairing height factor
 function prepareDroop(mesh) {
   const geo = mesh.geometry, M = mesh.matrixWorld.clone(), Minv = M.clone().invert(), N = new THREE.Matrix3().getNormalMatrix(M);
   const pos = geo.attributes.position, nor = geo.attributes.normal, v = new THREE.Vector3(), idx = [];
@@ -372,7 +377,11 @@ function updateNose(droopDeg, visorDown) {
   }
   if (Math.abs(visorDown - visorShown) > 0.002) {
     visorShown = visorDown;
-    for (const v of visorParts) v.mesh.position.copy(v.up).add(_p.copy(visorDrop).applyMatrix3(v.toLocal).multiplyScalar(visorDown));
+    for (const v of visorParts) {
+      v.mesh.position.copy(v.up).add(_p.copy(visorDrop).applyMatrix3(v.toLocal).multiplyScalar(visorDown));
+      v.mesh.visible = visorDown < 0.98;
+    }
+    visorFairing.visible = visorDown > 0.02;
   }
 }
 
@@ -719,13 +728,24 @@ async function onModel(gltf) {
     const toLocal = new THREE.Matrix3().setFromMatrix4(m.parent.matrixWorld).invert();   // raw direction -> parent space
     visorParts.push({ mesh: m, up: m.position.clone(), toLocal });
   }
+  // the fairing: painted copies of the visor and its panes, squashed down onto the visor's base line
+  visorFairing.position.set(0, VISOR_BASE_Y, 0); root.add(visorFairing); visorFairing.updateMatrixWorld(true);
+  const paint = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 0.38, metalness: 0.05, clearcoat: 0.6, clearcoatRoughness: 0.2, side: THREE.DoubleSide });
+  for (const m of visorMeshes) {
+    const c = new THREE.Mesh(m.geometry, paint);
+    m.updateMatrixWorld(true); c.matrixAutoUpdate = true;
+    m.matrixWorld.decompose(c.position, c.quaternion, c.scale);    // raw-space transform (root is still at the origin)
+    c.updateMatrixWorld(true); visorFairing.attach(c);
+  }
+  visorFairing.scale.y = FAIRING_SQUASH;
+  visorFairing.visible = false;
   const airframe = [];
   root.traverse(o => { if (o.isMesh && !isGear(o) && !visorMeshes.includes(o)) airframe.push(o); });
   airframe.forEach(prepareDroop);
   // The model has no cockpit interior: with the visor down you would see through the windscreen and the hollow
   // nose to the floor. A dark shell inside the flight deck (raw units, behind the hinge, inside the skin even
   // with the nose fully drooped) stands in for the interior.
-  const cabin = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0x14171c, side: THREE.DoubleSide }));
+  const cabin = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), new THREE.MeshBasicMaterial({ color: 0x3b4350, side: THREE.DoubleSide }));
   cabin.position.set(0, 1.95, -24.5); cabin.scale.set(0.95, 0.8, 2.4);
   cabin.name = 'cockpit_interior'; root.add(cabin);
   buildGear(root);
