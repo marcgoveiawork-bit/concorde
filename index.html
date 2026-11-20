@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Concorde</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Exo+2:ital,wght@1,800;1,900&family=Great+Vibes&family=Barlow+Condensed:wght@500;700&family=Barlow:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/*
+VOICE: a flight film, quiet and documentary. Few words, big numbers, the jet does the talking.
+IDEA: one continuous camera take in a deep-blue studio, opening and closing on a poster.
+PICTURE: the Concorde model full screen in three.js, lit and flown by the scroll.
+COLOUR and TYPE: high-altitude blue, white text, pale sky blue as the only accent. Anton / Exo 2 posters, Barlow text.
+LAYOUT: fixed WebGL stage behind; story chapters scroll over it, copy alternating left and right.
+*/
+:root{--bg:#08162b;--ink:#ffffff;--dim:#9fb0c8;--accent:#8fc8ff;color-scheme:dark}
+*{box-sizing:border-box;min-width:0}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font:17px/1.6 Barlow,system-ui,sans-serif;overflow-x:clip}
+h1,h2,.num{font-family:"Barlow Condensed",Barlow,sans-serif;font-weight:700;line-height:1.02;margin:0;text-wrap:balance}
+h1{font-size:clamp(56px,11vw,168px);letter-spacing:-.01em}
+h2{font-size:clamp(34px,4.6vw,56px)}
+p{margin:.7em 0 0;max-width:34em}
+.kicker{font:500 15px/1.3 "Barlow Condensed",sans-serif;color:var(--accent);margin:0 0 .6em}
+
+#stage{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0}
+#veil{position:fixed;inset:0;z-index:1;pointer-events:none;background:radial-gradient(120% 90% at 50% 50%,transparent 55%,rgba(4,11,22,.55))}
+
+/* chapters scroll over the fixed 3D stage */
+#story{position:relative;z-index:2}
+.chap{min-height:130vh;display:flex;align-items:center;padding:0 max(6vw,20px)}
+.chap.tall{min-height:170vh}
+.copy{max-width:440px;opacity:0;transform:translateY(28px);transition:opacity .8s,transform .8s}
+.copy.on{opacity:1;transform:none}
+.right{justify-content:flex-end}
+.center{justify-content:center;text-align:center}.center p{margin-inline:auto}
+.copy p{color:#dbe4f0}
+.poster{min-height:115vh;align-items:flex-end;justify-content:center;padding-bottom:22vh}
+#hint{position:fixed;left:50%;bottom:28px;z-index:4;transform:translateX(-50%);display:flex;align-items:center;gap:10px;
+  opacity:0;transition:opacity .6s;pointer-events:none}
+#hint.on{opacity:1}
+#hint.on button{pointer-events:auto}
+#hint .cue,#hint button,#tourStop{font:500 15px "Barlow Condensed",sans-serif;color:var(--ink);background:rgba(4,11,22,.72);border:1px solid rgba(143,200,255,.7);border-radius:999px;min-height:44px}
+#hint .cue{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:6px 18px 9px;white-space:nowrap}
+#hint button,#tourStop{display:flex;align-items:center;gap:9px;padding:0 18px;cursor:pointer;white-space:nowrap}
+#hint button{background:rgba(143,200,255,.2)}
+#hint button:hover,#tourStop:hover{background:rgba(143,200,255,.4)}
+#hint button:focus-visible,#tourStop:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+#hint button b,#tourStop b{width:0;height:0;border-left:9px solid var(--accent);border-top:6px solid transparent;border-bottom:6px solid transparent}
+#loopBar{position:fixed;left:20px;top:20px;z-index:6;display:flex;align-items:center;gap:12px;padding:6px 6px 6px 16px;
+  font:500 14px "Barlow Condensed",sans-serif;color:var(--dim);background:rgba(4,11,22,.78);border:1px solid rgba(143,200,255,.55);border-radius:999px;overflow:hidden;
+  opacity:0;pointer-events:none;transition:opacity .5s;white-space:nowrap}
+#loopBar.on{opacity:1;pointer-events:auto}
+#loopBar b{color:var(--ink);font-variant-numeric:tabular-nums}
+#loopBar button{font:inherit;color:var(--ink);background:rgba(143,200,255,.22);border:1px solid rgba(143,200,255,.7);border-radius:999px;min-height:36px;padding:0 14px;cursor:pointer}
+#loopBar button:hover{background:rgba(143,200,255,.4)}
+#loopBar button:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+#loopBar i{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--accent);transform-origin:left;transition:transform .1s linear}
+#fade{position:fixed;inset:0;z-index:7;background:var(--bg);opacity:0;pointer-events:none;transition:opacity .8s}
+#fade.on{opacity:1}
+#hint svg,#fsBtn svg{width:15px;height:15px;fill:none;stroke:var(--accent);stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+#fsBtn{position:fixed;right:18px;top:18px;z-index:5;display:flex;align-items:center;gap:8px;padding:0 14px;min-height:40px;cursor:pointer;
+  font:500 14px "Barlow Condensed",sans-serif;color:var(--ink);background:rgba(4,11,22,.6);border:1px solid rgba(255,255,255,.22);border-radius:999px;transition:background .3s,border-color .3s,opacity .3s}
+#fsBtn:hover{background:rgba(143,200,255,.3);border-color:rgba(143,200,255,.7)}
+#fsBtn:focus-visible{outline:2px solid var(--ink);outline-offset:3px}
+#fsBtn.active{opacity:.45}#fsBtn.active:hover{opacity:1}
+#fsBtn[hidden],#hint button[hidden]{display:none}
+#tourStop{position:fixed;left:20px;bottom:20px;z-index:5;opacity:0;pointer-events:none;transition:opacity .4s}
+#tourStop.on{opacity:1;pointer-events:auto}
+#tourStop b{border:0;width:10px;height:10px;background:var(--accent)}
+#hint i{width:10px;height:10px;border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);transform:rotate(45deg);animation:nudge 1.6s infinite}
+@keyframes nudge{0%,100%{transform:translateY(-3px) rotate(45deg);opacity:.5}50%{transform:translateY(3px) rotate(45deg);opacity:1}}
+.finale .more{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font:500 14px "Barlow Condensed",sans-serif;color:var(--dim);opacity:0;transition:opacity .5s;display:flex;flex-direction:column;align-items:center;gap:6px}
+.finale .more.on{opacity:1}
+.finale .more i{width:9px;height:9px;border-right:2px solid var(--accent);border-bottom:2px solid var(--accent);animation:nudge 1.6s infinite}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.scrollcue{margin-top:28px;font:500 14px "Barlow Condensed",sans-serif;color:var(--dim)}
+.scrollcue::after{content:"";display:block;width:1px;height:46px;margin-top:10px;background:linear-gradient(var(--ink),transparent);animation:cue 2s infinite}
+@keyframes cue{0%{transform:scaleY(0);transform-origin:top}50%{transform:scaleY(1);transform-origin:top}51%{transform-origin:bottom}100%{transform:scaleY(0);transform-origin:bottom}}
+
+/* pinned chapters: the copy holds still (sticky) while the scene keeps moving behind it */
+.chap.pin{min-height:260vh;align-items:flex-start}
+.chap.pin.short{min-height:200vh}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin:22px 0 4px}
+.stats .num{font-size:clamp(34px,4vw,48px)}
+.stats span{display:block;color:var(--dim);font-size:14px;line-height:1.35;margin-top:4px}
+.chap.pin .copy{position:sticky;top:34vh;margin-top:34vh}
+.chap.pin .copy{isolation:isolate}
+.chap.pin .copy::before{content:"";position:absolute;inset:-56px -72px;z-index:-1;background:rgba(4,11,22,.62);
+  -webkit-backdrop-filter:blur(14px) brightness(.55);backdrop-filter:blur(14px) brightness(.55);
+  -webkit-mask-image:radial-gradient(closest-side,#000 62%,transparent);mask-image:radial-gradient(closest-side,#000 62%,transparent)}
+
+/* closing poster: scrolls up into place, then pins while the jet flies into the gap */
+.finale{min-height:300vh;display:block;padding:0}
+.finale .sheet.copy{max-width:none;width:100%}
+.finale .sheet{position:sticky;top:0;height:100vh;display:flex;flex-direction:column;align-items:center;text-align:center;padding:7vh 20px 6vh}
+.finale .script{font:400 clamp(22px,2.4vw,30px)/1 "Great Vibes",cursive;color:var(--ink);margin:0}
+.finale .title{font:900 italic clamp(64px,13vw,190px)/.9 "Exo 2",sans-serif;letter-spacing:-.02em;margin:.08em 0 0;white-space:nowrap}
+.finale .sub{font:800 italic clamp(13px,1.3vw,17px)/1.2 "Exo 2",sans-serif;margin:.6em 0 0;color:var(--ink)}
+.finale .gap{flex:1}
+.finale .name{font:900 italic clamp(40px,7.4vw,112px)/.9 "Exo 2",sans-serif;letter-spacing:-.01em;margin:0;white-space:nowrap}
+.finale .blurb{max-width:46em;margin:1.2em auto 0;font-size:13.5px;line-height:1.55;color:#c8d4e4;text-wrap:balance}
+.finale .rule{width:56px;height:3px;background:var(--accent);margin:1.1em auto 0}
+
+/* records */
+.records{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:34px 48px;margin-top:28px;text-align:left}
+.num{font-size:clamp(40px,5vw,64px);color:var(--ink)}
+.num small{font-size:.45em;color:var(--accent);margin-left:.15em}
+.rec span{display:block;color:var(--dim);font-size:15px;line-height:1.4}
+#records .copy{max-width:600px}
+
+/* callout marker pinned to a 3D point on the jet */
+#marker{position:fixed;left:0;top:0;z-index:3;pointer-events:none;opacity:0;transition:opacity .5s}
+#marker.on{opacity:1}
+#marker i{position:absolute;left:-9px;top:-9px;width:18px;height:18px;border:2px solid var(--accent);border-radius:50%}
+#marker i::after{content:"";position:absolute;inset:-9px;border:1px solid var(--accent);border-radius:50%;animation:ping 1.8s infinite}
+#marker b{position:absolute;left:22px;top:-11px;white-space:nowrap;font:500 15px "Barlow Condensed",sans-serif;color:var(--ink);background:rgba(4,11,22,.6);padding:2px 8px}
+@keyframes ping{from{transform:scale(.6);opacity:1}to{transform:scale(1.8);opacity:0}}
+
+/* progress rail */
+#rail{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:3;display:flex;flex-direction:column;gap:10px}
+#rail a{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.25);display:block;transition:background .3s,transform .3s}
+#rail a.on{background:var(--accent);transform:scale(1.4)}
+#rail a:focus-visible{outline:2px solid var(--ink);outline-offset:4px}
+
+#loader{position:fixed;inset:0;z-index:10;display:grid;place-items:center;background:var(--bg);transition:opacity .9s .25s}
+#loader.done{opacity:0;pointer-events:none}
+#loader.gone{display:none}
+#loader .rig{display:flex;flex-direction:column;align-items:center;gap:22px}
+#loader svg{width:min(300px,62vw);height:auto;overflow:visible;transition:transform 1.1s cubic-bezier(.6,0,.2,1)}
+#loader.done svg{transform:scale(7)}                       /* fly through the engine face into the page */
+#loader .msg{font:500 15px "Barlow Condensed",sans-serif;color:var(--dim);text-align:center;min-height:1.3em}
+#loader .pct{font:700 44px/1 "Barlow Condensed",sans-serif;color:var(--ink);font-variant-numeric:tabular-nums}
+#loader .pct small{font-size:.4em;color:var(--accent);margin-left:4px}
+.finale .credit{margin:auto auto 0;padding-top:16px;font-size:12px;line-height:1.5;color:#7f90a8;max-width:60em}
+
+@media(max-width:700px){
+  /* phones: the jet is lifted to the top half, text sits low. Each section is centred on screen when its
+     key plays, so the bottom padding = half the extra section height + a margin. */
+  .chap,.right,.center{align-items:flex-end;justify-content:flex-start;text-align:left;padding-bottom:23vh}
+  .chap.tall{padding-bottom:43vh}
+  .center p{margin-inline:0}
+  .poster{justify-content:center;padding-bottom:22vh}
+  .chap.pin{align-items:flex-start;padding-bottom:0}
+  .chap.pin .copy{top:52vh;margin-top:52vh}
+  .finale .blurb{font-size:12.5px}
+  #loopBar{left:50%;top:10px;transform:translateX(-50%)}
+  #fsBtn span{display:none}#fsBtn{padding:0 12px;min-height:40px;top:12px;right:12px}
+  #hint{flex-wrap:wrap;justify-content:center;width:calc(100vw - 24px)}
+  .finale .sheet{padding-top:calc(7vh + 34px)}
+  .copy{text-shadow:0 1px 14px rgba(4,11,22,.9)}
+  .records{gap:22px 20px}
+  #rail{display:none}
+}
+@media(prefers-reduced-motion:reduce){.copy{transition:none}#hint i,.finale .more i,#marker i::after{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="stage" aria-hidden="true"></canvas>
+<div id="veil"></div>
+<div id="loader" role="status" aria-live="polite">
+  <div class="rig">
+    <svg viewBox="-170 -170 340 340" aria-hidden="true">
+      <defs>
+        <radialGradient id="duct"><stop offset="0" stop-color="#121417"/><stop offset=".75" stop-color="#050607"/><stop offset="1" stop-color="#000"/></radialGradient>
+        <radialGradient id="spikeG" cx=".38" cy=".35" r=".75"><stop offset="0" stop-color="#7d828a"/><stop offset=".45" stop-color="#2b2e33"/><stop offset="1" stop-color="#0b0c0e"/></radialGradient>
+        <linearGradient id="bladeG" x1="0" x2="1"><stop offset="0" stop-color="#3a3e44"/><stop offset=".5" stop-color="#8b9098"/><stop offset="1" stop-color="#2a2d31"/></linearGradient>
+        <radialGradient id="lipG"><stop offset=".86" stop-color="#16181b"/><stop offset=".93" stop-color="#5a5f66"/><stop offset="1" stop-color="#121315"/></radialGradient>
+      </defs>
+      <circle r="160" fill="url(#lipG)"/>
+      <circle r="140" fill="url(#duct)"/>
+      <g id="fan"></g>
+      <circle id="blur" r="132" fill="#6c7178" opacity="0"/>
+      <circle r="134" fill="none" stroke="#0a0b0c" stroke-width="5"/>
+      <circle r="48" fill="url(#spikeG)"/>
+      <circle r="48" fill="none" stroke="#000" stroke-opacity=".6" stroke-width="2"/>
+      <circle id="ring" r="166" fill="none" stroke="#8fc8ff" stroke-width="3" stroke-linecap="round" transform="rotate(-90)" stroke-dasharray="0 1043"/>
+    </svg>
+    <div class="pct"><span id="pctN">0</span><small>%</small></div>
+    <div class="msg" id="loadMsg">Spooling up the Olympus</div>
+  </div>
+</div>
+<div id="hint"><span class="cue" aria-hidden="true">Scroll to begin<i></i></span><button type="button" id="tourBtn"><b></b>Auto-play tour</button><button type="button" id="fsTourBtn"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 7V2h5M13 2h5v5M18 13v5h-5M7 18H2v-5"/></svg>Full-screen tour</button></div>
+<button type="button" id="fsBtn" aria-pressed="false"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 7V2h5M13 2h5v5M18 13v5h-5M7 18H2v-5"/></svg><span>Full screen</span></button>
+<button type="button" id="tourStop"><b></b>Stop tour</button>
+<div id="loopBar" role="status"><span>Replaying in <b id="loopN">10</b>s</span><button type="button" id="loopStay">Stay on this page</button><i id="loopFill"></i></div>
+<div id="fade" aria-hidden="true"></div>
+<script>
+/* Loader: the compressor face of an Olympus 593 spins up as the page loads. main.js reports progress through
+   window.loader.set(0..1) and calls window.loader.done() once the model, textures and shaders are ready. */
+{
+  const fan = document.getElementById('fan'), blur = document.getElementById('blur'), ring = document.getElementById('ring');
+  const pctN = document.getElementById('pctN'), C = 2 * Math.PI * 166;
+  const NS = 'http://www.w3.org/2000/svg', BLADES = 22;
+  for (let i = 0; i < BLADES; i++) {
+    const p = document.createElementNS(NS, 'path');
+    p.setAttribute('d', 'M -6 -46 C -2 -80 4 -108 14 -134 L 28 -131 C 18 -104 12 -78 8 -46 Z');
+    p.setAttribute('fill', 'url(#bladeG)'); p.setAttribute('transform', `rotate(${i * 360 / BLADES})`);
+    fan.append(p);
+  }
+  let target = 0, shown = 0, angle = 0, speed = 0, last = performance.now(), finished = false;
+  const t0 = performance.now();
+  function tick(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    shown += (target - shown) * Math.min(1, dt * (finished ? 7 : 4));
+    speed += ((finished ? 1.15 : shown) * 34 - speed) * Math.min(1, dt * 1.6);   // rad/s, lags like a real spool-up
+    angle += speed * dt;
+    fan.setAttribute('transform', `rotate(${angle * 180 / Math.PI})`);
+    blur.setAttribute('opacity', Math.min(0.55, Math.max(0, (speed - 8) / 40)).toFixed(3)); // motion blur disc at speed
+    ring.setAttribute('stroke-dasharray', `${(shown * C).toFixed(1)} ${C}`);
+    pctN.textContent = Math.round(shown * 100);
+    if (!document.getElementById('loader').classList.contains('gone')) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  window.loader = {
+    set: p => { target = Math.max(target, Math.min(1, p)); },
+    msg: m => { document.getElementById('loadMsg').textContent = m; },
+    done: () => {
+      target = 1; finished = true;
+      const wait = Math.max(0, 1900 - (performance.now() - t0));  // let the spool-up be seen
+      const ready = () => { if (shown < 0.995) return setTimeout(ready, 60); go(); };  // count all the way to 100 first
+      setTimeout(ready, wait);
+      const go = () => {
+        pctN.textContent = 100; window.loader.msg('Ready');
+        const el = document.getElementById('loader');
+        setTimeout(() => { el.classList.add('done'); setTimeout(() => el.classList.add('gone'), 1400); }, 450);
+      };
+    },
+  };
+}
+</script>
+<div id="marker" aria-hidden="true"><i></i><b></b></div>
+<nav id="rail" aria-label="Chapters"></nav>
+
+<main id="story">
+  <!-- Opening: the 3D floor carries the big CONCORDE / MACH 2 type; the aircraft taxis onto it on the first scroll. -->
+  <section class="chap poster" data-key="poster" id="top">
+    <div class="copy">
+      <h1 class="sr">Concorde</h1>
+    </div>
+  </section>
+
+  <section class="chap" data-key="arrive">
+    <div class="copy">
+      <p class="kicker">Aérospatiale &amp; British Aircraft Corporation</p>
+      <h2>Mach 2. 60,000 feet.</h2>
+      <p>Twenty built, fourteen in airline service, twenty-seven years carrying passengers at twice the speed of sound. Scroll on to explore the engineering behind the longest-serving supersonic airliner.</p>
+    </div>
+  </section>
+
+  <section class="chap right" data-key="airframe">
+    <div class="copy">
+      <p class="kicker">The airframe</p>
+      <h2>Painted to keep cool</h2>
+      <p>Most of the structure is an aluminium alloy, Hiduminium RR58, first developed for jet-engine parts. At Mach 2 friction heats the nose to about 127&nbsp;°C, so the white paint is far more reflective than an ordinary airliner's, to stop the sun adding any more.</p>
+    </div>
+  </section>
+
+  <section class="chap pin" data-key="blueprint">
+    <div class="copy">
+      <p class="kicker">The design</p>
+      <h2>Drawn in two languages</h2>
+      <p>Britain and France agreed by treaty in 1962 to build it together, with drawing offices in Filton and Toulouse. The French prototype, 001, first flew from Toulouse on 2 March 1969; the British 002 followed from Filton on 9 April.</p>
+    </div>
+  </section>
+
+  <section class="chap right" data-key="nose" data-anchor="nose" data-label="Droop nose">
+    <div class="copy">
+      <p class="kicker">Exterior tour, 1 of 5</p>
+      <h2>The drooping nose</h2>
+      <p>Concorde lands nose-high, so the pilots lowered the nose to see the runway: 5° for taxi and takeoff, 12.5° for landing. In cruise it rose flush and a glass visor slid up over the windscreen.</p>
+    </div>
+  </section>
+
+  <section class="chap" data-key="wing" data-anchor="wing" data-label="Ogee delta wing">
+    <div class="copy">
+      <p class="kicker">Exterior tour, 2 of 5</p>
+      <h2>An ogee delta wing</h2>
+      <p>No tailplane and no flaps. Six elevons on the trailing edge handle pitch and roll, and at low speed the sharp, curved leading edge rolls the air into strong vortices that keep the wing lifting at steep angles.</p>
+    </div>
+  </section>
+
+  <section class="chap right" data-key="intakes" data-anchor="intake" data-label="Variable intakes">
+    <div class="copy">
+      <p class="kicker">Exterior tour, 3 of 5</p>
+      <h2>Intakes that do the work</h2>
+      <p>Movable ramps inside each intake slow Mach 2 air below the speed of sound before it reaches the engine. At cruise about 63% of the forward push comes from pressure in the intakes; the engine itself contributes only around 8% directly.</p>
+    </div>
+  </section>
+
+  <section class="chap" data-key="engines" data-anchor="nozzle" data-label="Olympus 593 nozzles">
+    <div class="copy">
+      <p class="kicker">Exterior tour, 4 of 5</p>
+      <h2>Four Olympus 593s</h2>
+      <p>Built by Rolls-Royce and Snecma, each makes 38,050&nbsp;lbf with reheat. Reheat was lit for takeoff and to push through the sound barrier, then switched off: Concorde cruised at Mach 2 without it.</p>
+    </div>
+  </section>
+
+  <section class="chap right" data-key="tail" data-anchor="tail" data-label="Trim tanks">
+    <div class="copy">
+      <p class="kicker">Exterior tour, 5 of 5</p>
+      <h2>Fuel as ballast</h2>
+      <p>As speed builds, the wing's centre of lift slides aft. Rather than hold the nose up with drag-making elevons, the flight engineer pumped fuel back to tanks in the tail during the climb, and forward again before slowing down.</p>
+    </div>
+  </section>
+
+  <section class="chap pin short" data-key="takeoff">
+    <div class="copy">
+      <p class="kicker">Takeoff</p>
+      <h2>Four engines in reheat</h2>
+      <p>For the takeoff roll all four engines light their afterburners: about 152,000&nbsp;lbf of thrust between them, and a roar that made Concorde famous at every airport it visited.</p>
+    </div>
+  </section>
+
+  <!-- As the reheat settles the copy hands over to the cost, while the aircraft lifts off -->
+  <section class="chap pin right" data-key="cost">
+    <div class="copy">
+      <p class="kicker">Cost</p>
+      <h2>The price of speed</h2>
+      <div class="stats">
+        <div><div class="num">£23M</div><span>per aircraft, in 1977 prices</span></div>
+        <div><div class="num">14</div><span>in airline service, of 20 built</span></div>
+        <div><div class="num">$7,574</div><span>New York to London and back, 1996</span></div>
+      </div>
+      <p>Early estimates put the programme at about £70 million. It came to around £1.3 billion, shared by two governments, and only British Airways and Air France ever flew it.</p>
+    </div>
+  </section>
+
+  <section class="chap right" data-key="climb">
+    <div class="copy">
+      <p class="kicker">Climb</p>
+      <h2>Up to 60,000 feet</h2>
+      <p>Higher than any other airliner. From there the sky overhead turns a deep, dark blue and passengers could see the curve of the Earth.</p>
+    </div>
+  </section>
+
+  <section class="chap tall" data-key="cruise">
+    <div class="copy">
+      <p class="kicker">Cruise</p>
+      <h2>Mach 2, and a little longer</h2>
+      <p>At cruise the heat stretches the airframe by several inches. On the flight deck a gap opened beside the flight engineer's panel, and one engineer famously tucked his cap into it on a final flight, trapped there when the metal cooled.</p>
+    </div>
+  </section>
+
+  <section class="chap" data-key="records" id="records">
+    <div class="copy">
+      <p class="kicker">Still standing</p>
+      <h2>Records</h2>
+      <div class="records">
+        <div class="rec"><div class="num" data-count="1354" data-dec="0">0<small>mph</small></div><span>Cruising speed, Mach 2.04 (2,180 km/h)</span></div>
+        <div class="rec"><div class="num" data-count="60000" data-dec="0">0<small>ft</small></div><span>Cruising altitude, the highest of any airliner (18,300 m)</span></div>
+        <div class="rec"><div class="num">2:52:59</div><span>New York to London, 7 February 1996, the fastest airliner crossing</span></div>
+        <div class="rec"><div class="num">31h 27m</div><span>Around the world eastbound, August 1995</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="chap center tall" data-key="outro">
+    <div class="copy">
+      <p class="kicker">1976 to 2003</p>
+      <h2>The last of its kind</h2>
+      <p>Air France ended its flights in May 2003 and British Airways in October. On 26 November 2003 the last one built flew home to Filton. No airliner has carried passengers faster than sound since.</p>
+    </div>
+  </section>
+
+  <!-- Closing poster: the type scrolls into place and pins; then the aircraft flies in from the left into the gap. -->
+  <section class="finale" data-key="finale" data-static="1">
+    <div class="sheet copy on">
+      <p class="script">Twice the speed of sound</p>
+      <h2 class="title">CONCORDE</h2>
+      <p class="sub">LONDON · PARIS · NEW YORK</p>
+      <div class="gap"></div>
+      <h2 class="name">MACH 2</h2>
+      <div class="rule"></div>
+      <p class="blurb">Built by Britain and France and flown by British Airways and Air France from 1976 to 2003, Concorde crossed the Atlantic in about three and a half hours at 60,000 feet, above the weather and almost everything else in the sky. Four Rolls-Royce/Snecma Olympus engines, an ogee delta wing, and a transatlantic record no airliner has beaten.</p>
+      <div class="more">Keep scrolling<i></i></div>
+      <p class="credit">Designed by Marc Pio Goveia. A fan tribute and learning project. Not affiliated with Airbus, BAE Systems, British Airways or Air France.<br>3D model: <a id="modelCredit" href="#" style="color:inherit">[model]</a> by [author], licensed under [licence].</p>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/lenis@1.3.27/dist/lenis.min.js"></script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.187.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.187.0/examples/jsm/"}}</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>
